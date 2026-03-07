@@ -1,5 +1,6 @@
 # db.py — all database interactions
 
+import os
 import sqlite3
 from datetime import datetime
 from config import DB_PATH
@@ -13,6 +14,7 @@ def get_conn():
 
 def init_db():
     """Create all tables if they don't exist. Safe to call on every startup."""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = get_conn()
     c = conn.cursor()
 
@@ -227,6 +229,58 @@ def get_available_recipes() -> list[dict]:
     return available
 
 
+def get_all_recipes() -> list[dict]:
+    """Return all recipes (id, name, servings) — no ingredients."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, name, servings FROM recipes ORDER BY name ASC")
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_recipe_by_name(name: str) -> dict | None:
+    """Return a recipe with its ingredients by name (case-insensitive partial match)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, name, instructions, servings FROM recipes WHERE name LIKE ?",
+        (f"%{name}%",)
+    )
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    recipe = dict(row)
+    c.execute("""
+        SELECT i.name as item, ri.quantity, ri.unit
+        FROM recipe_ingredients ri
+        JOIN items i ON i.id = ri.item_id
+        WHERE ri.recipe_id = ?
+    """, (recipe["id"],))
+    recipe["ingredients"] = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return recipe
+
+
+def delete_recipe(name: str) -> bool:
+    """Delete a recipe by name. Returns True if found and deleted."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id FROM recipes WHERE name LIKE ?", (f"%{name}%",))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return False
+    recipe_id = row["id"]
+    c.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,))
+    c.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
 def add_recipe(name: str, instructions: str, ingredients: list[tuple], servings: int = 4) -> int:
     """
     Add a recipe with ingredients.
@@ -251,3 +305,19 @@ def add_recipe(name: str, instructions: str, ingredients: list[tuple], servings:
     conn.commit()
     conn.close()
     return recipe_id
+
+def get_recipe_missing_ingredients(recipe_id: int) -> list[str]:
+    """Return ingredient names for a recipe that are NOT currently 'יש' in inventory."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT i.name
+        FROM recipe_ingredients ri
+        JOIN items i ON i.id = ri.item_id
+        LEFT JOIN inventory inv ON inv.item_id = ri.item_id
+        WHERE ri.recipe_id = ?
+          AND (inv.status IS NULL OR inv.status != 'יש')
+    """, (recipe_id,))
+    missing = [row["name"] for row in c.fetchall()]
+    conn.close()
+    return missing

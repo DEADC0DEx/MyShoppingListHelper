@@ -1,18 +1,18 @@
 # bot.py — Telegram bot entry point
-#
-# Run with: python bot.py
-# Uses python-telegram-bot v20 (async)
 
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler,
+    MessageHandler, filters, ContextTypes
+)
 
 import db
 import executor
 import intent_parser
+import recipe_flow
+import recipe_parser
 from config import TELEGRAM_TOKEN
-
-# ── Logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Command handlers ──────────────────────────────────────────────────────────
+# ── Standard commands ─────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -32,43 +32,38 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  • *מה צריך לקנות?*\n"
         "  • *מה יש בבית?*\n"
         "  • *מה אפשר לבשל?*\n\n"
-        "פקודות נוספות: /help",
+        "פקודות: /help",
         parse_mode="Markdown"
     )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📋 *מה אני יכול לעשות:*\n\n"
-        "*עדכון מלאי:*\n"
-        "  קניתי חלב וביצים\n"
-        "  יש בבית עגבניות\n\n"
-        "*כשנגמר משהו:*\n"
-        "  נגמר החלב\n"
-        "  אין לחם\n"
-        "  הביצים על הסף\n\n"
-        "*צפייה:*\n"
-        "  מה צריך לקנות?\n"
-        "  מה יש בבית?\n\n"
-        "*בישול:*\n"
-        "  מה אפשר לבשל?\n"
-        "  הצע מתכון\n\n"
-        "פקודות ישירות:\n"
+        "📋 *פקודות זמינות:*\n\n"
+        "*קניות ומלאי:*\n"
         "  /list — רשימת קניות\n"
-        "  /inventory — מלאי\n"
-        "  /clear — נקה רשימת קניות",
+        "  /inventory — מלאי הבית\n"
+        "  /clear — נקה רשימת קניות\n\n"
+        "*מתכונים:*\n"
+        "  /add\\_recipe — הוסף מתכון (טקסט / תמונה / קישור)\n"
+        "  /step — הוסף מתכון שלב-שלב\n"
+        "  /recipes — כל המתכונים\n"
+        "  /recipe <שם> — פרטי מתכון\n"
+        "  /add\\_recipe\\_to\\_list <שם> — הוסף מרכיבים חסרים לרשימה\n"
+        "  /del\\_recipe <שם> — מחק מתכון\n"
+        "  /cancel — בטל פעולה נוכחית\n\n"
+        "*שפה חופשית:*\n"
+        "  קניתי / נגמר / מה יש / מה לבשל / הוסף מתכון...",
         parse_mode="Markdown"
     )
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply = executor.handle({"action": "list", "items": []})
-    await update.message.reply_text(reply)
+    await update.message.reply_text(executor.handle({"action": "list", "items": []}))
 
 
 async def cmd_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply = executor.handle({"action": "inventory", "items": []})
-    await update.message.reply_text(reply)
+    await update.message.reply_text(executor.handle({"action": "inventory", "items": []}))
 
 
 async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,55 +71,179 @@ async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ רשימת הקניות נוקתה.")
 
 
-# ── Message handler (main flow) ───────────────────────────────────────────────
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if recipe_flow.is_active(chat_id):
+        recipe_flow._clear(chat_id)
+        await update.message.reply_text("בוטל ✅")
+    else:
+        await update.message.reply_text("אין פעולה פעילה לביטול.")
+
+
+# ── Recipe commands ───────────────────────────────────────────────────────────
+
+async def cmd_add_recipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    reply = recipe_flow.start(chat_id)
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+
+async def cmd_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    reply = recipe_flow.start_step_by_step(chat_id)
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+
+async def cmd_recipes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    recipes = db.get_all_recipes()
+    if not recipes:
+        await update.message.reply_text(
+            "אין מתכונים שמורים עדיין.\n"
+            "הוסף מתכון עם /add\\_recipe",
+            parse_mode="Markdown"
+        )
+        return
+    lines = ["📖 *המתכונים שלך:*\n"]
+    for i, r in enumerate(recipes, 1):
+        lines.append(f"  {i}\\. {r['name']} \\({r['servings']} מנות\\)")
+    lines.append("\nלפרטים: /recipe <שם>")
+    await update.message.reply_text("\n".join(lines), parse_mode="MarkdownV2")
+
+
+async def cmd_recipe_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args) if context.args else ""
+    if not name:
+        await update.message.reply_text("שימוש: /recipe <שם המתכון>")
+        return
+    recipe = db.get_recipe_by_name(name)
+    if not recipe:
+        await update.message.reply_text(f"לא מצאתי מתכון בשם '{name}'.")
+        return
+    await update.message.reply_text(
+        recipe_parser.format_recipe_full(recipe),
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_del_recipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args) if context.args else ""
+    if not name:
+        await update.message.reply_text("שימוש: /del\\_recipe <שם המתכון>", parse_mode="Markdown")
+        return
+    deleted = db.delete_recipe(name)
+    if deleted:
+        await update.message.reply_text(f"🗑️ המתכון *{name}* נמחק.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"לא מצאתי מתכון בשם '{name}'.")
+
+
+async def cmd_add_recipe_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args) if context.args else ""
+    if not name:
+        await update.message.reply_text("שימוש: /add\\_recipe\\_to\\_list <שם המתכון>", parse_mode="Markdown")
+        return
+    recipe = db.get_recipe_by_name(name)
+    if not recipe:
+        await update.message.reply_text(f"לא מצאתי מתכון בשם '{name}'.")
+        return
+    missing = db.get_recipe_missing_ingredients(recipe["id"])
+    if not missing:
+        await update.message.reply_text(
+            f"✅ כל המרכיבים של *{recipe['name']}* כבר יש בבית!",
+            parse_mode="Markdown"
+        )
+        return
+    for item in missing:
+        db.add_to_shopping_list(item)
+    lines = "\n".join(f"  • {item}" for item in missing)
+    await update.message.reply_text(
+        f"🛒 הוספתי לרשימת הקניות ({len(missing)} פריטים חסרים מ*{recipe['name']}*):\n{lines}",
+        parse_mode="Markdown"
+    )
+
+
+# ── Message handler ───────────────────────────────────────────────────────────
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text.strip()
+    chat_id = update.effective_chat.id
+    user_text = (update.message.text or "").strip()
+
+    # If in a recipe flow, route there first
+    if recipe_flow.is_active(chat_id):
+        reply = recipe_flow.handle(chat_id, text=user_text)
+        if reply:
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        return
 
     if not user_text:
         return
 
-    logger.info(f"Received: {repr(user_text)}")
+    logger.info(f"Message from {chat_id}: {repr(user_text)}")
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
-    # Send typing indicator while LLM processes
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action="typing"
-    )
-
-    # Parse intent via LLM
     parsed = intent_parser.parse_intent(user_text)
 
-    # Execute action and get Hebrew reply
-    reply = executor.handle(parsed)
+    # "recipe" action from intent parser = user wants to ADD a recipe
+    if parsed["action"] == "recipe" and not parsed["items"]:
+        # Check if they're asking what to cook vs wanting to add a recipe
+        add_triggers = {"הוסף", "תוסיף", "שמור", "חדש", "רשום", "הכנס"}
+        if any(t in user_text for t in add_triggers):
+            reply = recipe_flow.start(chat_id)
+            await update.message.reply_text(reply, parse_mode="Markdown")
+            return
 
+    reply = executor.handle(parsed)
     await update.message.reply_text(reply)
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming photos — recipe OCR if in recipe flow, prompt otherwise."""
+    chat_id = update.effective_chat.id
+
+    if recipe_flow.is_active(chat_id):
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        photo = update.message.photo[-1]  # highest resolution
+        tg_file = await context.bot.get_file(photo.file_id)
+        image_bytes = bytes(await tg_file.download_as_bytearray())
+        reply = recipe_flow.handle(chat_id, image_bytes=image_bytes)
+        if reply:
+            await update.message.reply_text(reply, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(
+            "קיבלתי תמונה 📷\n\n"
+            "אם זה מתכון, כתוב /add\\_recipe ואז שלח את התמונה.",
+            parse_mode="Markdown"
+        )
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 def main():
-    # Initialize database on startup
     db.init_db()
     logger.info("Database initialized.")
 
     if TELEGRAM_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        logger.error(
-            "TELEGRAM_TOKEN not set! Edit config.py and add your bot token from @BotFather"
-        )
+        logger.error("TELEGRAM_TOKEN not set in config.py")
         return
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Register handlers
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("inventory", cmd_inventory))
-    app.add_handler(CommandHandler("clear", cmd_clear))
+    app.add_handler(CommandHandler("start",      cmd_start))
+    app.add_handler(CommandHandler("help",       cmd_help))
+    app.add_handler(CommandHandler("list",       cmd_list))
+    app.add_handler(CommandHandler("inventory",  cmd_inventory))
+    app.add_handler(CommandHandler("clear",      cmd_clear))
+    app.add_handler(CommandHandler("cancel",     cmd_cancel))
+    app.add_handler(CommandHandler("add_recipe", cmd_add_recipe))
+    app.add_handler(CommandHandler("step",       cmd_step))
+    app.add_handler(CommandHandler("recipes",    cmd_recipes))
+    app.add_handler(CommandHandler("recipe",     cmd_recipe_detail))
+    app.add_handler(CommandHandler("del_recipe",          cmd_del_recipe))
+    app.add_handler(CommandHandler("add_recipe_to_list", cmd_add_recipe_to_list))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot started. Waiting for messages...")
+    logger.info("Bot running. Press Ctrl+C to stop.")
     app.run_polling(drop_pending_updates=True)
 
 
