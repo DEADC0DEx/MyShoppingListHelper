@@ -41,7 +41,18 @@ def handle_add_batch(expenses: list[dict], source: str = "statement") -> str:
     Save a list of validated expenses (all categories already resolved).
     Returns summary string.
     """
-    count = db.add_expenses_batch(expenses, source=source)
+    normalized = [
+        {
+            "raw_merchant": e["merchant"],
+            "amount": e["amount"],
+            "category": e["category"],
+            "expense_date": e.get("date"),
+            "currency": e.get("currency", "ILS"),
+            "note": e.get("note"),
+        }
+        for e in expenses
+    ]
+    count = db.add_expenses_batch(normalized, source=source)
     total_ils = sum(e["amount"] for e in expenses if e.get("currency", "ILS") == "ILS")
     return (
         f"✅ נשמרו {count} הוצאות\n"
