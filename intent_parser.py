@@ -8,6 +8,7 @@
 
 import json
 import requests
+import db
 from config import OLLAMA_URL, OLLAMA_MODEL, VALID_ACTIONS
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
@@ -68,7 +69,10 @@ def parse_intent(user_message: str) -> dict:
         print(f"[intent_parser] Ollama request failed: {e}")
         return {"action": "unknown", "items": []}
 
-    return _validate(raw_text, original_message=user_message)
+    result = _validate(raw_text, original_message=user_message)
+    if result["action"] == "unknown":
+        db.log_failed_parse(user_message, raw_text)
+    return result
 
 
 def _validate(raw_text: str, original_message: str) -> dict:

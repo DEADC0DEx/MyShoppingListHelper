@@ -10,6 +10,7 @@ from telegram.ext import (
 import db
 import executor
 import intent_parser
+import list_flow
 import recipe_flow
 import recipe_parser
 from config import TELEGRAM_TOKEN
@@ -52,6 +53,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /add\\_recipe\\_to\\_list <שם> — הוסף מרכיבים חסרים לרשימה\n"
         "  /del\\_recipe <שם> — מחק מתכון\n"
         "  /cancel — בטל פעולה נוכחית\n\n"
+        "*רשימות שמורות:*\n"
+        "  /save\\_list <שם> — שמור רשימת קניות בשם\n"
+        "  /lists — כל הרשימות השמורות\n"
+        "  /use\\_list <שם> — עבור על רשימה והוסף פריטים\n"
+        "  /del\\_list <שם> — מחק רשימה שמורה\n\n"
         "*שפה חופשית:*\n"
         "  קניתי / נגמר / מה יש / מה לבשל / הוסף מתכון...",
         parse_mode="Markdown"
@@ -71,10 +77,73 @@ async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ רשימת הקניות נוקתה.")
 
 
+async def cmd_failed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = db.get_failed_parses(10)
+    if not rows:
+        await update.message.reply_text("אין הודעות שלא הובנו עד כה.")
+        return
+    lines = [f"⚠️ *10 הודעות אחרונות שלא הובנו:*\n"]
+    for r in rows:
+        lines.append(
+            f"🕐 {r['logged_at']}\n"
+            f"  משתמש: {r['user_message']}\n"
+            f"  LLM: {r['raw_llm_response'][:120]}\n"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_save_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args) if context.args else ""
+    if not name:
+        await update.message.reply_text("שימוש: /save\\_list <שם הרשימה>", parse_mode="Markdown")
+        return
+    chat_id = update.effective_chat.id
+    reply = list_flow.start_save(chat_id, name)
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+
+async def cmd_lists(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    names = db.get_all_named_lists()
+    if not names:
+        await update.message.reply_text(
+            "אין רשימות שמורות עדיין.\nהוסף עם /save\\_list <שם>",
+            parse_mode="Markdown"
+        )
+        return
+    lines = ["📋 *הרשימות השמורות שלך:*\n"]
+    for i, name in enumerate(names, 1):
+        lines.append(f"  {i}. {name}")
+    lines.append("\nלשימוש: /use\\_list <שם>")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_use_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args) if context.args else ""
+    if not name:
+        await update.message.reply_text("שימוש: /use\\_list <שם הרשימה>", parse_mode="Markdown")
+        return
+    reply = list_flow.start_use(update.effective_chat.id, name)
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+
+async def cmd_del_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args) if context.args else ""
+    if not name:
+        await update.message.reply_text("שימוש: /del\\_list <שם הרשימה>", parse_mode="Markdown")
+        return
+    if db.delete_named_list(name):
+        await update.message.reply_text(f"🗑️ הרשימה *{name}* נמחקה.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"לא מצאתי רשימה בשם '{name}'.")
+
+
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if recipe_flow.is_active(chat_id):
         recipe_flow._clear(chat_id)
+        await update.message.reply_text("בוטל ✅")
+    elif list_flow.is_active(chat_id):
+        list_flow.cancel(chat_id)
         await update.message.reply_text("בוטל ✅")
     else:
         await update.message.reply_text("אין פעולה פעילה לביטול.")
@@ -175,6 +244,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(reply, parse_mode="Markdown")
         return
 
+    # If in a list flow, route there
+    if list_flow.is_active(chat_id):
+        reply = list_flow.handle(chat_id, user_text)
+        if reply:
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        return
+
     if not user_text:
         return
 
@@ -240,6 +316,11 @@ def main():
     app.add_handler(CommandHandler("recipe",     cmd_recipe_detail))
     app.add_handler(CommandHandler("del_recipe",          cmd_del_recipe))
     app.add_handler(CommandHandler("add_recipe_to_list", cmd_add_recipe_to_list))
+    app.add_handler(CommandHandler("save_list",          cmd_save_list))
+    app.add_handler(CommandHandler("lists",              cmd_lists))
+    app.add_handler(CommandHandler("use_list",           cmd_use_list))
+    app.add_handler(CommandHandler("del_list",           cmd_del_list))
+    app.add_handler(CommandHandler("failed",             cmd_failed))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
