@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}סקירת הוצאות{% endblock %}
+{% block content %}
+<h1>🔍 סקירת הוצאות לפני שמירה</h1>
+
+<div class="card">
+  <p>
+    נמצאו <strong>{{ expenses|length }}</strong> הוצאות — סה"כ
+    <strong>{{ "%.2f"|format(total) }} ₪</strong>.
+    {% if dup_count > 0 %}
+      <span class="badge-dup">{{ dup_count }} כפילויות — מסומנות ולא מסומנות לשמירה</span>
+    {% endif %}
+  </p>
+</div>
+
+<form method="post" action="/save">
+  <div class="card" style="padding: 0; overflow: auto;">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:40px">✓</th>
+          <th>תאריך</th>
+          <th>בית עסק</th>
+          <th>סכום</th>
+          <th>קטגוריה</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for exp in expenses %}
+        <tr class="{{ 'duplicate' if exp.is_duplicate else '' }}">
+          <td style="text-align:center">
+            <input type="checkbox" name="include" value="{{ loop.index0 }}"
+              {{ '' if exp.is_duplicate else 'checked' }}>
+          </td>
+          <td>{{ exp.date or '—' }}</td>
+          <td>{{ exp.merchant }}</td>
+          <td style="white-space:nowrap">
+            {{ "%.2f"|format(exp.amount) }}
+            {% if exp.currency == 'ILS' %}₪{% else %}{{ exp.currency }}{% endif %}
+          </td>
+          <td>
+            <select name="category_{{ loop.index0 }}">
+              {% for cat in categories %}
+              <option value="{{ cat }}" {{ 'selected' if cat == exp.category else '' }}>{{ cat }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            {% if exp.is_duplicate %}<span class="badge-dup">כבר קיים</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <button type="submit" class="btn btn-success">שמור סומנים ←</button>
+  &nbsp;
+  <a href="/" class="btn btn-link">ביטול</a>
+</form>
+{% endblock %}

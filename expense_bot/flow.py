@@ -223,11 +223,30 @@ def _parse_csv_rows(rows: list[dict]) -> list[dict]:
 def _start_review(chat_id: int, expenses: list[dict], source: str) -> str:
     """
     Resolve categories: use DB for known merchants, ask LLM for the rest.
+    Filters out likely duplicates before review.
     If there are new merchants, start interactive review flow.
     Otherwise save immediately.
     """
     known = {m["display"].strip().lower(): m["category"] for m in db.get_all_merchants()}
     new_merchants: list[str] = []
+
+    # Deduplicate before anything else
+    fresh, duplicates = [], []
+    for exp in expenses:
+        if db.find_duplicate(exp["merchant"], exp["amount"], exp.get("date")):
+            duplicates.append(exp)
+        else:
+            fresh.append(exp)
+
+    if duplicates and not fresh:
+        cancel(chat_id)
+        return (
+            f"כל {len(duplicates)} ההוצאות כבר קיימות במסד הנתונים — לא נשמר כלום.\n"
+            "אם זה שגוי, השתמש ב-/import_statement שוב."
+        )
+
+    dup_note = f"\n_(דולגו {len(duplicates)} כפילויות)_" if duplicates else ""
+    expenses = fresh
 
     for exp in expenses:
         key = exp["merchant"].strip().lower()
@@ -247,7 +266,7 @@ def _start_review(chat_id: int, expenses: list[dict], source: str) -> str:
         # All merchants known — save immediately
         cancel(chat_id)
         reply = executor.handle_add_batch(expenses, source=source)
-        return reply
+        return reply + dup_note
 
     # Update state to reviewing phase
     _state[chat_id] = {
@@ -256,6 +275,7 @@ def _start_review(chat_id: int, expenses: list[dict], source: str) -> str:
         "new_merchants": new_merchants,
         "review_idx": 0,
         "source": source,
+        "dup_note": dup_note,
     }
 
     first_merchant = new_merchants[0]
@@ -266,7 +286,7 @@ def _start_review(chat_id: int, expenses: list[dict], source: str) -> str:
     suggested = first_exp["category"] if first_exp else DEFAULT_CATEGORY
 
     header = (
-        f"מצאתי *{len(expenses)}* הוצאות (סה\"כ {executor.format_amount(total_ils)})\n"
+        f"מצאתי *{len(expenses)}* הוצאות (סה\"כ {executor.format_amount(total_ils)}){dup_note}\n"
         f"יש *{len(new_merchants)}* בתי עסק חדשים — אשר את הקטגוריה לכל אחד:\n\n"
     )
     return header + _review_prompt(first_merchant, suggested)
@@ -285,10 +305,11 @@ def _finish_review(chat_id: int) -> tuple[str, bool]:
     state = _state.pop(chat_id, {})
     expenses = state.get("pending_expenses", [])
     source   = state.get("source", "statement")
+    dup_note = state.get("dup_note", "")
     if not expenses:
         return ("לא נשמרו הוצאות.", True)
     reply = executor.handle_add_batch(expenses, source=source)
-    return (reply, True)
+    return (reply + dup_note, True)
 
 
 # ── Keyboard builder (used by bot.py) ─────────────────────────────────────────

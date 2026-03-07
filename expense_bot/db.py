@@ -181,3 +181,38 @@ def update_expense_category(expense_id: int, category: str):
     )
     conn.commit()
     conn.close()
+
+
+def find_duplicate(merchant: str, amount: float, expense_date: str | None) -> int | None:
+    """
+    Return the ID of an existing expense that likely matches, else None.
+    Matches: same normalized merchant + same amount (±0.01) + date within 7 days.
+    Falls back to merchant+amount only when no date is given.
+    """
+    from datetime import date as _date, timedelta
+    conn = get_conn()
+    key = _normalize(merchant)
+    row = None
+    if expense_date:
+        try:
+            d = _date.fromisoformat(expense_date)
+            date_from = (d - timedelta(days=7)).isoformat()
+            date_to   = (d + timedelta(days=7)).isoformat()
+            row = conn.execute("""
+                SELECT e.id FROM expenses e
+                JOIN merchants m ON e.merchant_id = m.id
+                WHERE m.name = ? AND ABS(e.amount - ?) < 0.01
+                  AND e.expense_date BETWEEN ? AND ?
+                LIMIT 1
+            """, (key, amount, date_from, date_to)).fetchone()
+        except ValueError:
+            pass
+    if row is None:
+        row = conn.execute("""
+            SELECT e.id FROM expenses e
+            JOIN merchants m ON e.merchant_id = m.id
+            WHERE m.name = ? AND ABS(e.amount - ?) < 0.01
+            LIMIT 1
+        """, (key, amount)).fetchone()
+    conn.close()
+    return row["id"] if row else None

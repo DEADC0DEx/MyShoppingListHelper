@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}העלאת חשבון אשראי{% endblock %}
+{% block content %}
+<h1>💳 ייבוא חשבון אשראי</h1>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/upload" enctype="multipart/form-data">
+
+  <div class="card">
+    <h2>העלאת קובץ CSV</h2>
+    <label for="csv_file">בחר קובץ (UTF-8 / Windows-1255, עמודות: date, merchant, amount)</label>
+    <input type="file" id="csv_file" name="csv_file" accept=".csv,.txt">
+  </div>
+
+  <div class="card">
+    <h2>הדבקת טקסט חשבון</h2>
+    <label for="statement_text">הדבק כאן טקסט גולמי מהחשבון (PDF → עותק-הדבקה)</label>
+    <textarea id="statement_text" name="statement_text" placeholder="לדוגמה:&#10;01/03  רמי לוי  234.50&#10;03/03  YES פלאנט  89.00&#10;..."></textarea>
+  </div>
+
+  <button type="submit" class="btn btn-primary">ניתוח ←</button>
+</form>
+{% endblock %}
