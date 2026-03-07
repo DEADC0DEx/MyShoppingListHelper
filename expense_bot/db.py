@@ -129,10 +129,10 @@ def add_expenses_batch(expenses: list[dict], source: str = "statement") -> int:
     count = 0
     for exp in expenses:
         add_expense(
-            raw_merchant=exp["raw_merchant"],
+            raw_merchant=exp.get("raw_merchant") or exp["merchant"],
             amount=exp["amount"],
             category=exp["category"],
-            expense_date=exp.get("expense_date"),
+            expense_date=exp.get("expense_date") or exp.get("date"),
             currency=exp.get("currency", "ILS"),
             note=exp.get("note"),
             source=source,
