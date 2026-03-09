@@ -244,6 +244,10 @@ def test_receipt_flow():
     try:
         CHAT = 999
 
+        # Pre-populate shopping list — both items should be removed after confirmation
+        db.add_to_shopping_list("ביצות")
+        db.add_to_shopping_list("לבנה")
+
         # Start with two uncertain items
         reply = receipt_flow.start(CHAT, ["תוציב", "הנבל"])
         assert receipt_flow.is_active(CHAT)
@@ -266,6 +270,12 @@ def test_receipt_flow():
         names = [r["name"] for r in inventory]
         assert "ביצות" in names, f"Expected 'ביצות' in inventory, got {names}"
         print("  ✅ Confirmed item added to inventory")
+
+        # Verify "ביצות" was removed from shopping list; "לבנה" (skipped) still there
+        shopping = [r["name"] for r in db.get_shopping_list()]
+        assert "ביצות" not in shopping, f"Expected 'ביצות' removed from list, got {shopping}"
+        assert "לבנה" in shopping, f"Expected 'לבנה' still in list, got {shopping}"
+        print("  ✅ Confirmed item removed from shopping list, skipped item kept")
 
         # Verify translation was saved
         receipt_parser._cache = None

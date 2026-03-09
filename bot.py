@@ -346,6 +346,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Update inventory for all confidently-normalized items
     for item in certain:
         db.set_inventory_status(item, "יש")
+        db.remove_from_shopping_list(item)
 
     if certain:
         lines = "\n".join(f"  ✅ {item}" for item in certain)

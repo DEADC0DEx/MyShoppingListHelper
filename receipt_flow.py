@@ -51,9 +51,10 @@ def handle(chat_id: int, user_text: str) -> str:
         state["queue"].pop(0)
         print(f"[receipt_flow] Skipped '{raw}'")
     elif text:
-        # Save translation, update inventory
+        # Save translation, update inventory, remove from shopping list
         receipt_parser.save_translation(raw, text)
         db.set_inventory_status(text, "יש")
+        db.remove_from_shopping_list(text)
         state["done"] += 1
         state["queue"].pop(0)
         print(f"[receipt_flow] Confirmed '{raw}' → '{text}'")
