@@ -18,6 +18,7 @@ config.DB_PATH = "data/test.db"
 import db
 import executor
 import intent_parser
+import receipt_parser
 
 
 def reset_db():
@@ -104,6 +105,84 @@ def test_executor():
     print("✅ Executor test passed")
 
 
+# ── Test 2b: Receipt Parser (unit tests — no Ollama, no PDF file) ─────────────
+
+def test_receipt_parser():
+    print("\n── Test 2b: Receipt Parser ──────────────────────────────────")
+
+    # ── parse_receipt_lines ────────────────────────────────────────────────────
+
+    # Typical Hazi Hinam receipt text extracted by PyMuPDF.
+    # Words are in visual left-to-right order (Hebrew text appears reversed).
+    sample_text = """\
+ספק: חצי חינם
+תאריך: 01/01/2024
+
+פריטים שסופקו:
+קפוס 7290000066885 ןוטרקב ירט בלח 3% 2 2 11.90 א
+קפוס 7290010935651 תוציב 12 1 1 14.90 א
+קפוס 7290000197500 תיז ןמש 750 1 1 22.50 א
+ףילחת 7290001254383 ריחמ ןוקית 1 1 3.00 א
+קפוס 7290000228922 הנבל 5% 1 1 8.90 א
+
+פריטים שלא סופקו:
+קפוס 1111111111111 רצומ רסח 1 0 0.00 א
+"""
+
+    names = receipt_parser.parse_receipt_lines(sample_text)
+
+    # Should extract 4 items (not the ףילחת line, not the missing-section line)
+    assert len(names) == 4, f"Expected 4 items, got {len(names)}: {names}"
+    print(f"  ✅ Extracted {len(names)} items (skipped substitution + missing section)")
+    print(f"     {names}")
+
+    # ── _extract_product_name ──────────────────────────────────────────────────
+
+    fields_milk = ["קפוס", "7290000066885", "ןוטרקב", "ירט", "בלח", "3%", "2", "2", "11.90"]
+    name = receipt_parser._extract_product_name(fields_milk)
+    assert name == "ןוטרקב ירט בלח 3%", f"Got: '{name}'"
+    print(f"  ✅ _extract_product_name: '{name}'")
+
+    # Single-word product
+    fields_eggs = ["קפוס", "7290010935651", "תוציב", "12", "1", "1", "14.90"]
+    name = receipt_parser._extract_product_name(fields_eggs)
+    assert name == "תוציב", f"Got: '{name}'"
+    print(f"  ✅ _extract_product_name (single word): '{name}'")
+
+    # ── _clean_raw_name ────────────────────────────────────────────────────────
+
+    assert receipt_parser._clean_raw_name("  בלח.  ") == "בלח"
+    assert receipt_parser._clean_raw_name("תיז ןמש") == "תיז ןמש"
+    assert receipt_parser._clean_raw_name("בלח 3%") == "בלח 3%"
+    print("  ✅ _clean_raw_name strips edge punctuation correctly")
+
+    # ── Supplier-prefix filtering ──────────────────────────────────────────────
+
+    only_supplier = """\
+כותרת כלשהי
+ףילחת 111 תחליף-מוצר 1 1 5.00
+קפוס 222 םחל 1 1 3.50
+קפוס 333 הנבל 2 2 8.00
+שורה כללית ללא קידומת
+"""
+    names2 = receipt_parser.parse_receipt_lines(only_supplier)
+    assert len(names2) == 2, f"Expected 2, got {len(names2)}: {names2}"
+    print(f"  ✅ Supplier-prefix filter: {names2}")
+
+    # ── Missing-section stop ───────────────────────────────────────────────────
+
+    with_missing = """\
+קפוס 100 ירפ 1 1 4.00
+פריטים שלא סופקו
+קפוס 200 רסח 1 0 0.00
+"""
+    names3 = receipt_parser.parse_receipt_lines(with_missing)
+    assert len(names3) == 1, f"Expected 1 (stop before missing section), got {len(names3)}"
+    print(f"  ✅ Stops at missing-items section: {names3}")
+
+    print("✅ Receipt parser test passed")
+
+
 # ── Test 3: Intent Parser (requires Ollama) ───────────────────────────────────
 
 def test_intent_parser():
@@ -180,6 +259,7 @@ if __name__ == "__main__":
     try:
         test_database()
         test_executor()
+        test_receipt_parser()
         if run_ollama:
             test_intent_parser()
             test_full_flow()

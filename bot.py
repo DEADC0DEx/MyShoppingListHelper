@@ -13,6 +13,7 @@ import intent_parser
 import list_flow
 import recipe_flow
 import recipe_parser
+import receipt_parser
 from config import TELEGRAM_TOKEN
 
 logging.basicConfig(
@@ -59,7 +60,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /use\\_list <שם> — עבור על רשימה והוסף פריטים\n"
         "  /del\\_list <שם> — מחק רשימה שמורה\n\n"
         "*שפה חופשית:*\n"
-        "  קניתי / נגמר / מה יש / מה לבשל / הוסף מתכון...",
+        "  קניתי / נגמר / מה יש / מה לבשל / הוסף מתכון...\n\n"
+        "*ייבוא חשבונית:*\n"
+        "  /import — ייבא חשבונית PDF של חצי חינם",
         parse_mode="Markdown"
     )
 
@@ -292,6 +295,53 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ── Receipt import ────────────────────────────────────────────────────────────
+
+async def cmd_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt the user to send a Hazi Hinam PDF receipt for import."""
+    await update.message.reply_text(
+        "📄 שלח לי את קובץ ה-PDF של החשבונית (פורמט חצי חינם).\n"
+        "אחלץ ממנו את הפריטים שנרכשו ואעדכן את המלאי."
+    )
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle document uploads — treat PDFs as Hazi Hinam receipt imports."""
+    doc = update.message.document
+    if not doc or doc.mime_type != "application/pdf":
+        await update.message.reply_text("אני יודע לעבד רק קבצי PDF כרגע.")
+        return
+
+    await update.message.reply_text("📄 מעבד חשבונית... זה עשוי לקחת כמה שניות.")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    tg_file = await context.bot.get_file(doc.file_id)
+    pdf_bytes = bytes(await tg_file.download_as_bytearray())
+
+    try:
+        items = receipt_parser.import_receipt(pdf_bytes)
+    except Exception as e:
+        logger.error(f"Receipt import error: {e}")
+        await update.message.reply_text(f"❌ אירעה שגיאה בעיבוד החשבונית: {e}")
+        return
+
+    if not items:
+        await update.message.reply_text(
+            "⚠️ לא מצאתי פריטים בחשבונית.\n"
+            "ודא שזהו קובץ חשבונית של חצי חינם בפורמט הנכון."
+        )
+        return
+
+    for item in items:
+        db.set_inventory_status(item, "יש")
+
+    lines = "\n".join(f"  ✅ {item}" for item in items)
+    await update.message.reply_text(
+        f"🛒 עדכנתי *{len(items)} פריטים* במלאי:\n{lines}",
+        parse_mode="Markdown"
+    )
+
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 def main():
@@ -321,6 +371,8 @@ def main():
     app.add_handler(CommandHandler("use_list",           cmd_use_list))
     app.add_handler(CommandHandler("del_list",           cmd_del_list))
     app.add_handler(CommandHandler("failed",             cmd_failed))
+    app.add_handler(CommandHandler("import",             cmd_import))
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
