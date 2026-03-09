@@ -6,6 +6,7 @@
 
 import os
 import sys
+from datetime import datetime, timedelta
 
 # Ensure data dir exists before anything imports config
 os.makedirs("data", exist_ok=True)
@@ -59,6 +60,141 @@ def test_database():
     print(f"  ✅ After remove: {[r['name'] for r in shopping]}")
 
     print("✅ Database test passed")
+
+
+# ── Test 1b: Expiration dates ─────────────────────────────────────────────────
+
+def test_expiration():
+    print("\n── Test 1b: Expiration Dates ────────────────────────────────")
+    reset_db()
+
+    today = datetime.now().date()
+    exp_soon = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+    exp_far  = (today + timedelta(days=60)).strftime("%Y-%m-%d")
+    exp_today = today.strftime("%Y-%m-%d")
+
+    db.set_inventory_status("חלב", "יש")
+    db.set_expiration_date("חלב", exp_soon)
+
+    db.set_inventory_status("קמח", "יש")
+    db.set_expiration_date("קמח", exp_far)
+
+    db.set_inventory_status("גבינה", "יש")
+    db.set_expiration_date("גבינה", exp_today)
+
+    expiring = db.get_expiring_soon_items(days=30)
+    names = [i["name"] for i in expiring]
+    assert "חלב" in names, f"Expected 'חלב' in expiring, got {names}"
+    assert "גבינה" in names, f"Expected 'גבינה' in expiring, got {names}"
+    assert "קמח" not in names, f"'קמח' should not be in 30-day expiring list, got {names}"
+    print(f"  ✅ Expiring within 30 days: {names}")
+
+    # Check days_left for today's item
+    today_item = next(i for i in expiring if i["name"] == "גבינה")
+    assert today_item["days_left"] == 0, f"Expected 0 days left, got {today_item['days_left']}"
+    print("  ✅ days_left = 0 for item expiring today")
+
+    # Add expiring items to shopping list with note
+    added = db.add_to_shopping_list("חלב", note="פג תוקף בקרוב")
+    assert added is True, "Expected newly added = True"
+    added_again = db.add_to_shopping_list("חלב", note="פג תוקף בקרוב")
+    assert added_again is False, "Expected no duplicate = False"
+    print("  ✅ add_to_shopping_list with note, no duplicates")
+
+    shopping = db.get_shopping_list()
+    milk = next((r for r in shopping if r["name"] == "חלב"), None)
+    assert milk is not None, "חלב not found in shopping list"
+    assert milk["note"] == "פג תוקף בקרוב", f"Expected note, got {milk['note']}"
+    print("  ✅ Shopping list entry has correct note")
+
+    # Verify executor shows note as prefix in list display
+    reply = executor.handle({"action": "list", "items": []})
+    assert "פג תוקף בקרוב" in reply, f"Expected note prefix in list reply, got: {reply}"
+    print("  ✅ List display shows expiration note prefix")
+
+    # Test scheduler helper functions
+    import scheduler
+    expiring_sched = scheduler.get_expiring_items()
+    assert any(i["name"] == "גבינה" for i in expiring_sched), "גבינה should appear in scheduler expiring"
+    print("  ✅ scheduler.get_expiring_items() returns expiring items")
+
+    # גבינה is not yet in shopping list — add_expiring_to_shopping_list should add it
+    newly = scheduler.add_expiring_to_shopping_list([{"name": "גבינה", "exp_date": exp_today, "days_left": 0}])
+    assert len(newly) == 1 and newly[0]["name"] == "גבינה", f"Expected גבינה newly added, got {newly}"
+    print("  ✅ scheduler.add_expiring_to_shopping_list() adds item and reports it as new")
+
+    # Calling again should not re-add (already pending)
+    newly2 = scheduler.add_expiring_to_shopping_list([{"name": "גבינה", "exp_date": exp_today, "days_left": 0}])
+    assert len(newly2) == 0, f"Expected 0 newly added on second call, got {newly2}"
+    print("  ✅ No duplicate addition on repeated scheduler run")
+
+    # Test build_message includes expiring section
+    msg = scheduler.build_message(
+        low=[],
+        predicted=[],
+        expiring=[{"name": "חלב", "exp_date": exp_soon, "days_left": 10}],
+        newly_added_expiring=[{"name": "חלב", "exp_date": exp_soon, "days_left": 10}],
+    )
+    assert msg is not None, "Expected non-None message with expiring items"
+    assert "חלב" in msg, f"Expected חלב in message: {msg}"
+    assert "פג תוקף" in msg, f"Expected 'פג תוקף' in message: {msg}"
+    print("  ✅ build_message includes expiring section and newly-added notification")
+
+    print("✅ Expiration dates test passed")
+
+
+# ── Test 1c: Location support ─────────────────────────────────────────────────
+
+def test_location():
+    print("\n── Test 1c: Location Support ────────────────────────────────")
+    reset_db()
+
+    # Set items in different locations
+    db.set_inventory_status("חלב", "יש", location="בית")
+    db.set_inventory_status("חלב", "יש", location="מקלט")
+    db.set_inventory_status("שעועית", "יש", location="מקלט")
+    db.set_inventory_status("לחם", "אין", location="בית")
+
+    # get_inventory without filter returns all
+    all_inv = db.get_inventory()
+    assert len(all_inv) == 4, f"Expected 4 inventory rows (2 locations × items), got {len(all_inv)}"
+    locations = {r["location"] for r in all_inv}
+    assert "בית" in locations and "מקלט" in locations, f"Expected both locations, got {locations}"
+    print("  ✅ get_inventory() returns items from all locations")
+
+    # get_inventory with location filter
+    home_inv = db.get_inventory(location="בית")
+    assert all(r["location"] == "בית" for r in home_inv), "All items should be from בית"
+    shelter_inv = db.get_inventory(location="מקלט")
+    assert all(r["location"] == "מקלט" for r in shelter_inv), "All items should be from מקלט"
+    print(f"  ✅ Filtered inventory: {len(home_inv)} home, {len(shelter_inv)} shelter items")
+
+    # Expiration per location
+    today = datetime.now().date()
+    exp_soon = (today + timedelta(days=5)).strftime("%Y-%m-%d")
+    db.set_expiration_date("חלב", exp_soon, location="מקלט")
+
+    expiring_all = db.get_expiring_soon_items(days=30)
+    assert any(i["name"] == "חלב" and i["location"] == "מקלט" for i in expiring_all)
+    print("  ✅ Expiring items include location field")
+
+    expiring_shelter = db.get_expiring_soon_items(days=30, location="מקלט")
+    assert all(i["location"] == "מקלט" for i in expiring_shelter)
+    expiring_home = db.get_expiring_soon_items(days=30, location="בית")
+    assert len(expiring_home) == 0, f"No expiring items at home, got {expiring_home}"
+    print("  ✅ get_expiring_soon_items location filter works")
+
+    # Executor inventory display groups by location
+    reply = executor._handle_inventory([])
+    assert "מקלט" in reply and "בית" in reply, f"Expected both location headers, got: {reply}"
+    print("  ✅ Inventory display groups by location")
+
+    reply_shelter = executor._handle_inventory([], location="מקלט")
+    assert "מקלט" not in reply_shelter or "בית" not in reply_shelter, \
+        "Filtered inventory should not show location header for single location"
+    print("  ✅ Filtered inventory display works")
+
+    print("✅ Location support test passed")
 
 
 # ── Test 2: Executor ──────────────────────────────────────────────────────────
@@ -179,6 +315,8 @@ if __name__ == "__main__":
 
     try:
         test_database()
+        test_expiration()
+        test_location()
         test_executor()
         if run_ollama:
             test_intent_parser()

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 
 import requests
 
+import db as db_module
 from config import (
     CHAT_ID,
     DB_PATH,
@@ -97,9 +98,32 @@ def get_predicted_items() -> list[tuple[str, int]]:
     return predicted
 
 
-def build_message(low: list[str], predicted: list[tuple[str, int]]) -> str | None:
+def get_expiring_items() -> list[dict]:
+    """Items expiring within the next 30 days. Returns list of dicts with name, exp_date, days_left."""
+    return db_module.get_expiring_soon_items(days=30)
+
+
+def add_expiring_to_shopping_list(expiring: list[dict]) -> list[dict]:
+    """Add expiring items to the shopping list with a note. Returns only newly added items."""
+    newly_added = []
+    for item in expiring:
+        added = db_module.add_to_shopping_list(item["name"], note="פג תוקף בקרוב")
+        if added:
+            newly_added.append(item)
+    return newly_added
+
+
+def build_message(
+    low: list[str],
+    predicted: list[tuple[str, int]],
+    expiring: list[dict] = None,
+    newly_added_expiring: list[dict] = None,
+) -> str | None:
     """Build Hebrew reminder message. Returns None if nothing to report."""
-    if not low and not predicted:
+    expiring = expiring or []
+    newly_added_expiring = newly_added_expiring or []
+
+    if not low and not predicted and not expiring:
         return None
 
     lines = ["📦 תזכורת יומית — מה כדאי לקנות היום:\n"]
@@ -116,6 +140,21 @@ def build_message(low: list[str], predicted: list[tuple[str, int]]) -> str | Non
         for name, days in predicted:
             suffix = "היום" if days == 0 else f"בעוד {days} יום"
             lines.append(f"  • {name} ({suffix})")
+
+    if expiring:
+        if low or predicted:
+            lines.append("")
+        lines.append("📅 *פג תוקף בקרוב:*")
+        for item in expiring:
+            days_left = item["days_left"]
+            suffix = "היום" if days_left == 0 else f"בעוד {days_left} יום"
+            loc_tag = f" | 📍 {item['location']}" if item.get("location") and item["location"] != "בית" else ""
+            lines.append(f"  • {item['name']} ({item['exp_date']} — {suffix}{loc_tag})")
+
+    if newly_added_expiring:
+        lines.append("")
+        names = ", ".join(i["name"] for i in newly_added_expiring)
+        lines.append(f"🛒 *הוספתי לרשימת הקניות:* {names}")
 
     lines.append("\n/list — לרשימת הקניות המלאה")
     return "\n".join(lines)
@@ -140,16 +179,24 @@ def main():
         print("[scheduler] CHAT_ID not set in config.py", file=sys.stderr)
         sys.exit(1)
 
+    db_module.init_db()
+
     low = get_low_items()
     predicted = get_predicted_items()
-    message = build_message(low, predicted)
+    expiring = get_expiring_items()
+    newly_added = add_expiring_to_shopping_list(expiring)
+
+    message = build_message(low, predicted, expiring, newly_added)
 
     if not message:
         print("[scheduler] Nothing to report today.")
         return
 
     send_telegram(TELEGRAM_TOKEN, CHAT_ID, message)
-    print(f"[scheduler] Sent reminder: {len(low)} low, {len(predicted)} predicted.")
+    print(
+        f"[scheduler] Sent reminder: {len(low)} low, {len(predicted)} predicted, "
+        f"{len(expiring)} expiring ({len(newly_added)} newly added to list)."
+    )
 
 
 if __name__ == "__main__":

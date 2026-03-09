@@ -92,36 +92,48 @@ def _handle_list(items: list) -> str:
     if not shopping:
         return "✨ רשימת הקניות ריקה! אין מה לקנות כרגע."
 
-    lines = "\n".join(f"  • {row['name']}" for row in shopping)
+    lines = []
+    for row in shopping:
+        if row.get("note"):
+            lines.append(f"  • ⚠️ {row['note']}: {row['name']}")
+        else:
+            lines.append(f"  • {row['name']}")
     count = len(shopping)
-    return f"🛒 רשימת הקניות ({count} פריטים):\n{lines}"
+    return f"🛒 רשימת הקניות ({count} פריטים):\n" + "\n".join(lines)
 
 
-def _handle_inventory(items: list) -> str:
-    inventory = db.get_inventory()
+def _handle_inventory(items: list, location: str = None) -> str:
+    inventory = db.get_inventory(location=location)
 
     if not inventory:
-        return "המלאי ריק. תוסיף פריטים עם 'קניתי...' או 'יש בבית...'"
+        loc_note = f" ב{location}" if location else ""
+        return f"המלאי{loc_note} ריק. תוסיף פריטים עם 'קניתי...' או 'יש בבית...'"
 
-    # Group by status
-    groups = {"יש": [], "נמוך": [], "אין": []}
+    # Group by location, then status
+    from collections import defaultdict
+    by_location = defaultdict(lambda: {"יש": [], "נמוך": [], "אין": []})
     for row in inventory:
-        status = row["status"]
-        if status in groups:
-            groups[status].append(row["name"])
+        by_location[row["location"]][row["status"]].append(row["name"])
 
     lines = []
-    if groups["יש"]:
-        lines.append("✅ יש:")
-        lines += [f"  • {name}" for name in groups["יש"]]
-    if groups["נמוך"]:
-        lines.append("⚠️ נמוך:")
-        lines += [f"  • {name}" for name in groups["נמוך"]]
-    if groups["אין"]:
-        lines.append("❌ אין:")
-        lines += [f"  • {name}" for name in groups["אין"]]
+    for loc in sorted(by_location.keys()):
+        groups = by_location[loc]
+        # Only show location header when there are multiple locations
+        if len(by_location) > 1:
+            lines.append(f"📍 *{loc}:*")
+        if groups["יש"]:
+            lines.append("✅ יש:")
+            lines += [f"  • {name}" for name in groups["יש"]]
+        if groups["נמוך"]:
+            lines.append("⚠️ נמוך:")
+            lines += [f"  • {name}" for name in groups["נמוך"]]
+        if groups["אין"]:
+            lines.append("❌ אין:")
+            lines += [f"  • {name}" for name in groups["אין"]]
+        if len(by_location) > 1:
+            lines.append("")
 
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip()
 
 
 def _handle_recipe(items: list) -> str:

@@ -30,14 +30,17 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item_id INTEGER NOT NULL REFERENCES items(id),
             status TEXT NOT NULL DEFAULT 'יש' CHECK(status IN ('יש', 'נמוך', 'אין')),
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            exp_date TEXT DEFAULT NULL,
+            location TEXT NOT NULL DEFAULT 'בית'
         );
 
         CREATE TABLE IF NOT EXISTS shopping_list (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item_id INTEGER NOT NULL REFERENCES items(id),
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            bought INTEGER DEFAULT 0
+            bought INTEGER DEFAULT 0,
+            note TEXT DEFAULT NULL
         );
 
         CREATE TABLE IF NOT EXISTS usage_log (
@@ -83,6 +86,19 @@ def init_db():
     """)
 
     conn.commit()
+
+    # Migrate existing databases: add new columns if they don't exist yet
+    for migration in [
+        "ALTER TABLE inventory ADD COLUMN exp_date TEXT DEFAULT NULL",
+        "ALTER TABLE inventory ADD COLUMN location TEXT NOT NULL DEFAULT 'בית'",
+        "ALTER TABLE shopping_list ADD COLUMN note TEXT DEFAULT NULL",
+    ]:
+        try:
+            c.execute(migration)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
     conn.close()
 
 
@@ -109,24 +125,24 @@ def get_or_create_item(name: str) -> int:
 
 # ── Inventory ─────────────────────────────────────────────────────────────────
 
-def set_inventory_status(item_name: str, status: str):
-    """Set an item's inventory status. Creates item and inventory record if needed."""
+def set_inventory_status(item_name: str, status: str, location: str = "בית"):
+    """Set an item's inventory status for a given location. Creates records if needed."""
     item_id = get_or_create_item(item_name)
     conn = get_conn()
     c = conn.cursor()
 
-    c.execute("SELECT id FROM inventory WHERE item_id = ?", (item_id,))
+    c.execute("SELECT id FROM inventory WHERE item_id = ? AND location = ?", (item_id, location))
     row = c.fetchone()
 
     if row:
         c.execute(
-            "UPDATE inventory SET status = ?, last_updated = ? WHERE item_id = ?",
-            (status, datetime.now(), item_id)
+            "UPDATE inventory SET status = ?, last_updated = ? WHERE item_id = ? AND location = ?",
+            (status, datetime.now(), item_id, location)
         )
     else:
         c.execute(
-            "INSERT INTO inventory (item_id, status) VALUES (?, ?)",
-            (item_id, status)
+            "INSERT INTO inventory (item_id, status, location) VALUES (?, ?, ?)",
+            (item_id, status, location)
         )
 
     # Log the change
@@ -139,25 +155,101 @@ def set_inventory_status(item_name: str, status: str):
     conn.close()
 
 
-def get_inventory() -> list[dict]:
-    """Return all inventory items with their status."""
+def get_inventory(location: str = None) -> list[dict]:
+    """Return inventory items with their status.
+    If location is given, return only items from that location.
+    Otherwise return all items, including a 'location' field."""
     conn = get_conn()
     c = conn.cursor()
-    c.execute("""
-        SELECT i.name, inv.status, inv.last_updated
-        FROM inventory inv
-        JOIN items i ON i.id = inv.item_id
-        ORDER BY inv.status ASC, i.name ASC
-    """)
+    if location:
+        c.execute("""
+            SELECT i.name, inv.status, inv.last_updated, inv.location, inv.exp_date
+            FROM inventory inv
+            JOIN items i ON i.id = inv.item_id
+            WHERE inv.location = ?
+            ORDER BY inv.status ASC, i.name ASC
+        """, (location,))
+    else:
+        c.execute("""
+            SELECT i.name, inv.status, inv.last_updated, inv.location, inv.exp_date
+            FROM inventory inv
+            JOIN items i ON i.id = inv.item_id
+            ORDER BY inv.location ASC, inv.status ASC, i.name ASC
+        """)
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
 
 
+def set_expiration_date(item_name: str, exp_date: str, location: str = "בית"):
+    """Set or update the expiration date (YYYY-MM-DD) for an inventory item at a given location."""
+    item_id = get_or_create_item(item_name)
+    conn = get_conn()
+    c = conn.cursor()
+
+    c.execute("SELECT id FROM inventory WHERE item_id = ? AND location = ?", (item_id, location))
+    row = c.fetchone()
+    if row:
+        c.execute(
+            "UPDATE inventory SET exp_date = ? WHERE item_id = ? AND location = ?",
+            (exp_date, item_id, location)
+        )
+    else:
+        c.execute(
+            "INSERT INTO inventory (item_id, status, exp_date, location) VALUES (?, 'יש', ?, ?)",
+            (item_id, exp_date, location)
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def get_expiring_soon_items(days: int = 30, location: str = None) -> list[dict]:
+    """Return inventory items whose exp_date falls within the next `days` days.
+    Optionally filter by location. Each result has keys: name, exp_date, days_left, location."""
+    conn = get_conn()
+    c = conn.cursor()
+    if location:
+        c.execute("""
+            SELECT i.name, inv.exp_date, inv.location
+            FROM inventory inv
+            JOIN items i ON i.id = inv.item_id
+            WHERE inv.exp_date IS NOT NULL AND inv.location = ?
+            ORDER BY inv.exp_date ASC
+        """, (location,))
+    else:
+        c.execute("""
+            SELECT i.name, inv.exp_date, inv.location
+            FROM inventory inv
+            JOIN items i ON i.id = inv.item_id
+            WHERE inv.exp_date IS NOT NULL
+            ORDER BY inv.exp_date ASC
+        """)
+    rows = c.fetchall()
+    conn.close()
+
+    today = datetime.now().date()
+    result = []
+    for row in rows:
+        try:
+            exp = datetime.strptime(row["exp_date"], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        days_left = (exp - today).days
+        if 0 <= days_left <= days:
+            result.append({
+                "name": row["name"],
+                "exp_date": row["exp_date"],
+                "days_left": days_left,
+                "location": row["location"],
+            })
+    return result
+
+
 # ── Shopping list ─────────────────────────────────────────────────────────────
 
-def add_to_shopping_list(item_name: str):
-    """Add item to shopping list if not already there (pending)."""
+def add_to_shopping_list(item_name: str, note: str = None) -> bool:
+    """Add item to shopping list if not already there (pending). Returns True if newly added."""
     item_id = get_or_create_item(item_name)
     conn = get_conn()
     c = conn.cursor()
@@ -169,12 +261,15 @@ def add_to_shopping_list(item_name: str):
     )
     if not c.fetchone():
         c.execute(
-            "INSERT INTO shopping_list (item_id) VALUES (?)",
-            (item_id,)
+            "INSERT INTO shopping_list (item_id, note) VALUES (?, ?)",
+            (item_id, note)
         )
         conn.commit()
+        conn.close()
+        return True
 
     conn.close()
+    return False
 
 
 def remove_from_shopping_list(item_name: str):
@@ -195,7 +290,7 @@ def get_shopping_list() -> list[dict]:
     conn = get_conn()
     c = conn.cursor()
     c.execute("""
-        SELECT i.name, sl.added_at
+        SELECT i.name, sl.added_at, sl.note
         FROM shopping_list sl
         JOIN items i ON i.id = sl.item_id
         WHERE sl.bought = 0

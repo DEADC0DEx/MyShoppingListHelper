@@ -45,6 +45,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /list — רשימת קניות\n"
         "  /inventory — מלאי הבית\n"
         "  /clear — נקה רשימת קניות\n\n"
+        "*תאריכי תפוגה ומיקום:*\n"
+        "  /set\\_exp <מוצר> <YYYY-MM-DD> \\[מיקום\\] — קבע תאריך תפוגה\n"
+        "  /expiring \\[מיקום\\] — מוצרים שפג תוקפם ב-30 הימים הקרובים\n"
+        "  /inventory \\[מיקום\\] — מלאי הבית / מקלט / כל המיקומים\n\n"
         "*מתכונים:*\n"
         "  /add\\_recipe — הוסף מתכון (טקסט / תמונה / קישור)\n"
         "  /step — הוסף מתכון שלב-שלב\n"
@@ -69,7 +73,9 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(executor.handle({"action": "inventory", "items": []}))
+    location = " ".join(context.args) if context.args else None
+    reply = executor._handle_inventory([], location=location)
+    await update.message.reply_text(reply, parse_mode="Markdown")
 
 
 async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -147,6 +153,77 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("בוטל ✅")
     else:
         await update.message.reply_text("אין פעולה פעילה לביטול.")
+
+
+# ── Expiration commands ───────────────────────────────────────────────────────
+
+async def cmd_set_exp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage: /set_exp <item name> <YYYY-MM-DD> [location]
+    The last argument is treated as location if it doesn't look like a date.
+    Examples:
+      /set_exp חלב 2025-04-10
+      /set_exp חלב 2025-04-10 מקלט
+    """
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "שימוש: /set\\_exp <שם המוצר> <YYYY-MM-DD> \\[מיקום\\]\n"
+            "לדוגמה:\n"
+            "  /set\\_exp חלב 2025-04-10\n"
+            "  /set\\_exp חלב 2025-04-10 מקלט",
+            parse_mode="Markdown"
+        )
+        return
+
+    from datetime import datetime as dt
+
+    # Find the date argument (format YYYY-MM-DD)
+    date_idx = None
+    for i, arg in enumerate(context.args):
+        try:
+            dt.strptime(arg, "%Y-%m-%d")
+            date_idx = i
+            break
+        except ValueError:
+            continue
+
+    if date_idx is None:
+        await update.message.reply_text(
+            "לא מצאתי תאריך תקין בפקודה.\nפורמט נדרש: YYYY-MM-DD",
+            parse_mode="Markdown"
+        )
+        return
+
+    exp_date = context.args[date_idx]
+    item_name = " ".join(context.args[:date_idx])
+    location = " ".join(context.args[date_idx + 1:]) or "בית"
+
+    if not item_name:
+        await update.message.reply_text("חסר שם המוצר לפני התאריך.")
+        return
+
+    db.set_expiration_date(item_name, exp_date, location)
+    await update.message.reply_text(
+        f"✅ תאריך תפוגה עודכן: *{item_name}* — {exp_date} \\(📍 {location}\\)",
+        parse_mode="MarkdownV2"
+    )
+
+
+async def cmd_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show items expiring within the next 30 days. Optional location filter."""
+    location = " ".join(context.args) if context.args else None
+    items = db.get_expiring_soon_items(days=30, location=location)
+    if not items:
+        loc_note = f" ב{location}" if location else ""
+        await update.message.reply_text(f"✅ אין מוצרים שפג תוקפם{loc_note} ב-30 הימים הקרובים.")
+        return
+    loc_header = f" \\(📍 {location}\\)" if location else ""
+    lines = [f"📅 *מוצרים שפג תוקפם בקרוב{loc_header}:*\n"]
+    for item in items:
+        days_left = item["days_left"]
+        suffix = "היום!" if days_left == 0 else f"בעוד {days_left} יום"
+        loc_tag = f" \\| 📍 {item['location']}" if not location else ""
+        lines.append(f"  • {item['name']} — {item['exp_date']} \\({suffix}{loc_tag}\\)")
+    await update.message.reply_text("\n".join(lines), parse_mode="MarkdownV2")
 
 
 # ── Recipe commands ───────────────────────────────────────────────────────────
@@ -310,6 +387,8 @@ def main():
     app.add_handler(CommandHandler("inventory",  cmd_inventory))
     app.add_handler(CommandHandler("clear",      cmd_clear))
     app.add_handler(CommandHandler("cancel",     cmd_cancel))
+    app.add_handler(CommandHandler("set_exp",    cmd_set_exp))
+    app.add_handler(CommandHandler("expiring",   cmd_expiring))
     app.add_handler(CommandHandler("add_recipe", cmd_add_recipe))
     app.add_handler(CommandHandler("step",       cmd_step))
     app.add_handler(CommandHandler("recipes",    cmd_recipes))
