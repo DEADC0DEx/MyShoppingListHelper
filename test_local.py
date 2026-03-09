@@ -184,6 +184,133 @@ def test_receipt_parser():
     print("✅ Receipt parser test passed")
 
 
+# ── Test 2b-2: Shufersal parser ───────────────────────────────────────────────
+
+def test_receipt_parser_shufersal():
+    print("\n── Test 2b-2: Shufersal Parser ──────────────────────────────")
+
+    # ── detect_format ──────────────────────────────────────────────────────────
+
+    shufersal_text = "שופרסל\nקוד פריט  תאור  הוזמן  סופק  מחיר  סה\"כ\n7290000066885  חלב  1  1  5.90  5.90"
+    hazi_text = "קפוס 7290000066885 בלח 1 1 5.90 א"
+    pairzon_text = "הנה הקישור לחשבונית: https://osher.pairzon.com/abc.html?id=xyz&p=123"
+    garbled_text = "𝄞𝄟𝄠𝄡𝄢𝄣𝄤 ©®™ 𝄞𝄟𝄠"  # no Hebrew
+
+    assert receipt_parser.detect_format(shufersal_text) == "shufersal", \
+        f"Expected shufersal, got {receipt_parser.detect_format(shufersal_text)}"
+    assert receipt_parser.detect_format(hazi_text) == "hazi_hinam", \
+        f"Expected hazi_hinam, got {receipt_parser.detect_format(hazi_text)}"
+    assert receipt_parser.detect_format(pairzon_text) == "pairzon_url", \
+        f"Expected pairzon_url, got {receipt_parser.detect_format(pairzon_text)}"
+    assert receipt_parser.detect_format("אין כאן שום סימן מזהה") == "unknown", \
+        "Expected unknown for plain Hebrew without format markers"
+    print("  ✅ detect_format correctly identifies all four formats")
+
+    # ── parse_shufersal ────────────────────────────────────────────────────────
+
+    # Realistic Shufersal receipt text: only lines where סופק > 0 should appear.
+    # Column order: קוד פריט | תאור | הוזמן | סופק | מחיר | סה"כ
+    sample = """\
+שופרסל
+חשבונית מס
+תאריך: 01/01/2024
+
+קוד פריט    תאור                          הוזמן  סופק  מחיר    סה"כ
+-------------------------------------------------------------------
+7290000066885  חלב בקרטון 3% שומן 1 ל'  1  1  5.90  5.90
+7290010935651  ביצים ארוזות XL 12יחידות  1  1  14.90  14.90
+7290000197500  שמן זית כתית 750מ"ל  1  1  22.50  22.50
+מבצע: 10% הנחה  -2.25
+7290000228922  לבנה 5%  2  0  8.90  0.00
+7290001234567  יוגורט תות  3  3  4.90  14.70
+----
+סך הכל:  55.85
+מע"מ 17%:  8.15
+לתשלום:  55.85
+"""
+
+    items = receipt_parser.parse_shufersal(sample)
+    names = [item["name"] for item in items]
+    qtys  = [item["qty"]  for item in items]
+
+    # 4 items: milk, eggs, oil, yogurt — laban (qty=0) and discount line skipped
+    assert len(items) == 4, f"Expected 4 items, got {len(items)}: {names}"
+    print(f"  ✅ Extracted {len(items)} items (skipped qty=0 laban + discount + summary)")
+
+    # Verify product names are extracted (with trailing weight still present — LLM strips later)
+    assert any("חלב" in n for n in names), f"חלב not found in {names}"
+    assert any("ביצים" in n for n in names), f"ביצים not found in {names}"
+    assert any("שמן" in n for n in names), f"שמן not found in {names}"
+    assert any("יוגורט" in n for n in names), f"יוגורט not found in {names}"
+    print(f"  ✅ Correct product names: {names}")
+
+    # Verify quantities
+    assert qtys[0] == 1.0, f"Milk qty should be 1, got {qtys[0]}"
+    assert qtys[3] == 3.0, f"Yogurt qty should be 3, got {qtys[3]}"
+    print(f"  ✅ Quantities correct: {qtys}")
+
+    # לבנה with qty=0 must be excluded
+    assert not any("לבנה" in n for n in names), "לבנה with qty=0 should be excluded"
+    print("  ✅ Items with qty=0 correctly excluded")
+
+    print("✅ Shufersal parser test passed")
+
+
+# ── Test 2b-3: Pairzon HTML parser ────────────────────────────────────────────
+
+def test_receipt_parser_pairzon():
+    print("\n── Test 2b-3: Pairzon HTML Parser ───────────────────────────")
+
+    sample_html = """\
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head><meta charset="utf-8"><title>חשבונית פאירזון</title></head>
+<body>
+<h1>חשבונית מס</h1>
+<table>
+  <tr>
+    <th>קוד פריט</th>
+    <th>תאור</th>
+    <th>הוזמן</th>
+    <th>סופק</th>
+    <th>מחיר</th>
+    <th>סה&quot;כ</th>
+  </tr>
+  <tr><td>7290000066885</td><td>חלב בקרטון 3%</td><td>1</td><td>1</td><td>5.90</td><td>5.90</td></tr>
+  <tr><td>7290010935651</td><td>ביצים</td><td>1</td><td>1</td><td>14.90</td><td>14.90</td></tr>
+  <tr><td>7290000228922</td><td>לבנה 5%</td><td>2</td><td>0</td><td>8.90</td><td>0.00</td></tr>
+  <tr><td>7290001234567</td><td>יוגורט תות</td><td>3</td><td>3</td><td>4.90</td><td>14.70</td></tr>
+</table>
+<p>סך הכל: 35.50 ₪</p>
+</body>
+</html>
+"""
+
+    items = receipt_parser._parse_pairzon_html(sample_html)
+    names = [item["name"] for item in items]
+    qtys  = [item["qty"]  for item in items]
+
+    assert len(items) == 3, f"Expected 3 items (laban qty=0 excluded), got {len(items)}: {names}"
+    print(f"  ✅ Extracted {len(items)} items from HTML (qty=0 excluded)")
+
+    assert "חלב בקרטון 3%" in names, f"חלב not found in {names}"
+    assert "ביצים" in names, f"ביצים not found in {names}"
+    assert "יוגורט תות" in names, f"יוגורט תות not found in {names}"
+    assert "לבנה 5%" not in names, f"לבנה with qty=0 should be excluded"
+    print(f"  ✅ Correct names: {names}")
+
+    assert qtys[2] == 3.0, f"Yogurt qty should be 3, got {qtys[2]}"
+    print(f"  ✅ Quantities correct: {qtys}")
+
+    # Table with unrecognised headers should yield nothing
+    bad_html = "<table><tr><th>A</th><th>B</th></tr><tr><td>x</td><td>1</td></tr></table>"
+    assert receipt_parser._parse_pairzon_html(bad_html) == [], \
+        "Should return [] for table with unrecognised headers"
+    print("  ✅ Unrecognised table headers correctly ignored")
+
+    print("✅ Pairzon HTML parser test passed")
+
+
 # ── Test 2c: Translation cache ────────────────────────────────────────────────
 
 def test_translation_cache():
@@ -370,6 +497,8 @@ if __name__ == "__main__":
         test_database()
         test_executor()
         test_receipt_parser()
+        test_receipt_parser_shufersal()
+        test_receipt_parser_pairzon()
         test_translation_cache()
         test_receipt_flow()
         if run_ollama:

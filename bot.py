@@ -1,6 +1,7 @@
 # bot.py — Telegram bot entry point
 
 import logging
+import re
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler,
@@ -63,7 +64,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*שפה חופשית:*\n"
         "  קניתי / נגמר / מה יש / מה לבשל / הוסף מתכון...\n\n"
         "*ייבוא חשבונית:*\n"
-        "  /import — ייבא חשבונית PDF של חצי חינם",
+        "  /import — ייבא חשבונית PDF (שופרסל / חצי חינם)\n"
+        "  או שלח קישור פאירזון (osher.pairzon.com) ישירות בצ'אט",
         parse_mode="Markdown"
     )
 
@@ -244,6 +246,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_text = (update.message.text or "").strip()
 
+    # Check for Pairzon receipt URL before any flow check
+    pairzon_match = receipt_parser.PAIRZON_URL_RE.search(user_text)
+    if pairzon_match:
+        await _handle_pairzon_receipt(update, context, pairzon_match.group(0))
+        return
+
     # If in a recipe flow, route there first
     if recipe_flow.is_active(chat_id):
         reply = recipe_flow.handle(chat_id, text=user_text)
@@ -306,13 +314,53 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ── Pairzon URL receipt import ────────────────────────────────────────────────
+
+async def _handle_pairzon_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    """Fetch a Pairzon HTML receipt, normalise names, and update inventory."""
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("🔗 מאחזר חשבונית פאירזון...")
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+    try:
+        items = receipt_parser.parse_pairzon_url(url)
+    except Exception as e:
+        logger.error(f"Pairzon parse error: {e}")
+        await update.message.reply_text(f"❌ שגיאה בקריאת החשבונית: {e}")
+        return
+
+    if not items:
+        await update.message.reply_text(
+            "⚠️ לא מצאתי פריטים בחשבונית הפאירזון.\n"
+            "ודא שהקישור תקין ושהחשבונית מכילה טבלת מוצרים."
+        )
+        return
+
+    raw_names = [item["name"] for item in items]
+    normalized = receipt_parser.normalize_item_names(raw_names)
+
+    for name in normalized:
+        db.set_inventory_status(name, "יש")
+        db.remove_from_shopping_list(name)
+
+    lines = "\n".join(f"  ✅ {name}" for name in normalized)
+    await update.message.reply_text(
+        f"🛒 עדכנתי *{len(normalized)} פריטים* במלאי מחשבונית פאירזון:\n{lines}",
+        parse_mode="Markdown"
+    )
+
+
 # ── Receipt import ────────────────────────────────────────────────────────────
 
 async def cmd_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Prompt the user to send a Hazi Hinam PDF receipt for import."""
+    """Prompt the user to send a receipt PDF or Pairzon URL."""
     await update.message.reply_text(
-        "📄 שלח לי את קובץ ה-PDF של החשבונית (פורמט חצי חינם).\n"
-        "אחלץ ממנו את הפריטים שנרכשו ואעדכן את המלאי."
+        "📄 *ייבוא חשבונית*\n\n"
+        "שלח לי אחד מהבאים:\n"
+        "  • קובץ PDF של שופרסל או חצי חינם\n"
+        "  • קישור חשבונית פאירזון (osher.pairzon.com)\n\n"
+        "אחלץ את הפריטים שנרכשו ואעדכן את המלאי.",
+        parse_mode="Markdown"
     )
 
 
