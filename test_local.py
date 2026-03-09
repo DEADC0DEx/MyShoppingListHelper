@@ -19,6 +19,7 @@ import db
 import executor
 import intent_parser
 import receipt_parser
+import receipt_flow
 
 
 def reset_db():
@@ -183,6 +184,105 @@ def test_receipt_parser():
     print("✅ Receipt parser test passed")
 
 
+# ── Test 2c: Translation cache ────────────────────────────────────────────────
+
+def test_translation_cache():
+    print("\n── Test 2c: Translation cache ───────────────────────────────")
+
+    # Point the cache at a temp file so we don't pollute the real one
+    original_path = receipt_parser.TRANSLATIONS_PATH
+    test_csv = "data/test_translations.csv"
+    receipt_parser.TRANSLATIONS_PATH = test_csv
+    receipt_parser._cache = None  # reset lazy cache
+
+    try:
+        # File doesn't exist yet — cache should be empty
+        cache = receipt_parser._load_cache()
+        assert cache == {}, f"Expected empty cache, got {cache}"
+        print("  ✅ Empty cache on missing file")
+
+        # Save a translation
+        receipt_parser.save_translation("תוציב", "ביצות")
+        receipt_parser.save_translation("הנבל", "לבנה")
+
+        # Reload and verify
+        receipt_parser._cache = None
+        cache = receipt_parser._load_cache()
+        assert cache.get("תוציב") == "ביצות", f"Got: {cache}"
+        assert cache.get("הנבל") == "לבנה"
+        print(f"  ✅ Saved and reloaded {len(cache)} translations")
+
+        # Saving the same entry again must not duplicate it
+        receipt_parser.save_translation("תוציב", "ביצות")
+        receipt_parser._cache = None
+        cache2 = receipt_parser._load_cache()
+        assert len(cache2) == 2, f"Expected 2, got {len(cache2)}"
+        print("  ✅ No duplicates on repeated save")
+
+    finally:
+        # Restore state
+        receipt_parser.TRANSLATIONS_PATH = original_path
+        receipt_parser._cache = None
+        if os.path.exists(test_csv):
+            os.remove(test_csv)
+
+    print("✅ Translation cache test passed")
+
+
+# ── Test 2d: Receipt flow (stateful confirmation) ─────────────────────────────
+
+def test_receipt_flow():
+    print("\n── Test 2d: Receipt flow ────────────────────────────────────")
+    reset_db()
+
+    # Point translations at a temp file
+    original_path = receipt_parser.TRANSLATIONS_PATH
+    test_csv = "data/test_flow_translations.csv"
+    receipt_parser.TRANSLATIONS_PATH = test_csv
+    receipt_parser._cache = None
+
+    try:
+        CHAT = 999
+
+        # Start with two uncertain items
+        reply = receipt_flow.start(CHAT, ["תוציב", "הנבל"])
+        assert receipt_flow.is_active(CHAT)
+        assert "תוציב" in reply
+        print(f"  ✅ Started flow, first question: {reply[:60]!r}...")
+
+        # User confirms the first item
+        reply = receipt_flow.handle(CHAT, "ביצות")
+        assert "הנבל" in reply  # moved to next item
+        print(f"  ✅ Confirmed first item, next question shown")
+
+        # User skips the second item
+        reply = receipt_flow.handle(CHAT, "דלג")
+        assert not receipt_flow.is_active(CHAT)  # conversation ended
+        assert "1" in reply  # 1 item confirmed
+        print(f"  ✅ Skipped second item, flow ended: {reply!r}")
+
+        # Verify the confirmed item was saved to inventory
+        inventory = db.get_inventory()
+        names = [r["name"] for r in inventory]
+        assert "ביצות" in names, f"Expected 'ביצות' in inventory, got {names}"
+        print("  ✅ Confirmed item added to inventory")
+
+        # Verify translation was saved
+        receipt_parser._cache = None
+        cache = receipt_parser._load_cache()
+        assert cache.get("תוציב") == "ביצות", f"Cache: {cache}"
+        assert "הנבל" not in cache  # skipped item not saved
+        print("  ✅ Translation saved for confirmed item, skipped item not saved")
+
+    finally:
+        receipt_parser.TRANSLATIONS_PATH = original_path
+        receipt_parser._cache = None
+        if os.path.exists(test_csv):
+            os.remove(test_csv)
+
+    print("✅ Receipt flow test passed")
+
+
 # ── Test 3: Intent Parser (requires Ollama) ───────────────────────────────────
 
 def test_intent_parser():
@@ -260,6 +360,8 @@ if __name__ == "__main__":
         test_database()
         test_executor()
         test_receipt_parser()
+        test_translation_cache()
+        test_receipt_flow()
         if run_ollama:
             test_intent_parser()
             test_full_flow()

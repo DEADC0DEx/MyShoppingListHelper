@@ -6,10 +6,18 @@
 # Only "קפוס" lines are processed (supplier lines).
 # "ףילחת" lines (substitutions/deposits) are skipped.
 # Processing stops at the "missing items" section near the bottom.
+#
+# Translation cache:
+#   Raw→normalized mappings are stored in data/receipt_translations.csv so that
+#   confirmed translations are reused on future imports without calling the LLM.
 
+import csv
+import os
 import re
 import requests
-from config import OLLAMA_URL, OLLAMA_MODEL
+from config import OLLAMA_URL, OLLAMA_MODEL, DB_PATH
+
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 # Prefix that marks a supplier/product line (visual order of "ספוק")
 SUPPLIER_PREFIX = "קפוס"
@@ -27,6 +35,46 @@ MISSING_SECTION_MARKERS = [
     "וקפוס אל",
 ]
 
+# Path to the CSV translation cache (same directory as the database)
+TRANSLATIONS_PATH = os.path.join(os.path.dirname(DB_PATH) or "data",
+                                 "receipt_translations.csv")
+
+# ── Translation cache (raw → normalized) ──────────────────────────────────────
+
+_cache: dict | None = None  # lazy-loaded
+
+
+def _load_cache() -> dict:
+    global _cache
+    if _cache is not None:
+        return _cache
+    _cache = {}
+    if os.path.exists(TRANSLATIONS_PATH):
+        with open(TRANSLATIONS_PATH, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                raw = row.get("raw", "").strip()
+                norm = row.get("normalized", "").strip()
+                if raw and norm:
+                    _cache[raw] = norm
+    return _cache
+
+
+def save_translation(raw: str, normalized: str) -> None:
+    """Persist a raw→normalized mapping to the CSV cache."""
+    cache = _load_cache()
+    if cache.get(raw) == normalized:
+        return  # already stored
+    cache[raw] = normalized
+    os.makedirs(os.path.dirname(TRANSLATIONS_PATH) or ".", exist_ok=True)
+    with open(TRANSLATIONS_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["raw", "normalized"])
+        writer.writeheader()
+        for r, n in cache.items():
+            writer.writerow({"raw": r, "normalized": n})
+    print(f"[receipt_parser] Saved translation: '{raw}' → '{normalized}'")
+
+
+# ── PDF text extraction ────────────────────────────────────────────────────────
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """Extract all text from a PDF using PyMuPDF (fitz)."""
@@ -43,6 +91,8 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     doc.close()
     return "\n".join(pages)
 
+
+# ── Line parsing ───────────────────────────────────────────────────────────────
 
 def parse_receipt_lines(text: str) -> list:
     """
@@ -137,11 +187,22 @@ NORMALIZE_PROMPT = """אתה עוזר בית. קיבלת שם מוצר גולמ�
 פלט:"""
 
 
-def normalize_product_name(raw_name: str) -> str:
+def normalize_product_name(raw_name: str) -> tuple:
     """
-    Use the LLM to normalize a raw product name from the receipt into clean Hebrew.
-    Falls back to the raw name if the LLM call fails.
+    Normalize a raw product name from the receipt into clean Hebrew.
+
+    Returns (normalized_name, is_certain):
+      - is_certain=True  when the translation came from the cache or the LLM
+                         returned something different from the raw input.
+      - is_certain=False when the LLM failed or returned the raw name unchanged,
+                         meaning a human should confirm.
     """
+    # 1. Check translation cache first
+    cache = _load_cache()
+    if raw_name in cache:
+        return cache[raw_name], True
+
+    # 2. Call LLM
     prompt = NORMALIZE_PROMPT.format(raw=raw_name)
     try:
         response = requests.post(
@@ -158,30 +219,44 @@ def normalize_product_name(raw_name: str) -> str:
         result = response.json().get("response", "").strip()
         # Take only the first line in case the model adds extra text
         result = result.splitlines()[0].strip() if result else ""
-        return result if result else raw_name
     except requests.RequestException as e:
         print(f"[receipt_parser] Ollama error normalizing '{raw_name}': {e}")
-        return raw_name  # Fall back to raw name so import still works
+        return raw_name, False  # uncertain — human should confirm
+
+    if not result or result == raw_name:
+        # LLM didn't help — flag for human confirmation
+        return raw_name, False
+
+    # Cache the successful LLM result for future imports
+    save_translation(raw_name, result)
+    return result, True
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def import_receipt(pdf_bytes: bytes) -> list:
+def import_receipt(pdf_bytes: bytes) -> tuple:
     """
-    Parse a Hazi Hinam PDF receipt and return a list of normalized product names.
+    Parse a Hazi Hinam PDF receipt and classify each extracted product.
 
-    Each name is ready to be passed to db.set_inventory_status(name, "יש").
-    Returns an empty list if no items could be extracted.
+    Returns (certain, uncertain):
+      certain   — list of clean Hebrew names the LLM (or cache) normalized
+                  confidently; call db.set_inventory_status(name, "יש") for each.
+      uncertain — list of raw product name strings the LLM couldn't normalize;
+                  present to the user for manual confirmation via receipt_flow.
     """
     text = extract_text_from_pdf(pdf_bytes)
     raw_names = parse_receipt_lines(text)
 
     print(f"[receipt_parser] Found {len(raw_names)} product lines in receipt")
 
-    normalized = []
+    certain = []
+    uncertain = []
     for raw in raw_names:
-        name = normalize_product_name(raw)
-        print(f"[receipt_parser]   '{raw}' → '{name}'")
-        normalized.append(name)
+        name, is_certain = normalize_product_name(raw)
+        print(f"[receipt_parser]   '{raw}' → '{name}' (certain={is_certain})")
+        if is_certain:
+            certain.append(name)
+        else:
+            uncertain.append(raw)
 
-    return normalized
+    return certain, uncertain

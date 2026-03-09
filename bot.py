@@ -14,6 +14,7 @@ import list_flow
 import recipe_flow
 import recipe_parser
 import receipt_parser
+import receipt_flow
 from config import TELEGRAM_TOKEN
 
 logging.basicConfig(
@@ -148,6 +149,9 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif list_flow.is_active(chat_id):
         list_flow.cancel(chat_id)
         await update.message.reply_text("בוטל ✅")
+    elif receipt_flow.is_active(chat_id):
+        receipt_flow.cancel(chat_id)
+        await update.message.reply_text("בוטל ✅")
     else:
         await update.message.reply_text("אין פעולה פעילה לביטול.")
 
@@ -254,6 +258,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(reply, parse_mode="Markdown")
         return
 
+    # If confirming uncertain products from a receipt import, route there
+    if receipt_flow.is_active(chat_id):
+        reply = receipt_flow.handle(chat_id, user_text)
+        if reply:
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        return
+
     if not user_text:
         return
 
@@ -319,27 +330,34 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pdf_bytes = bytes(await tg_file.download_as_bytearray())
 
     try:
-        items = receipt_parser.import_receipt(pdf_bytes)
+        certain, uncertain = receipt_parser.import_receipt(pdf_bytes)
     except Exception as e:
         logger.error(f"Receipt import error: {e}")
         await update.message.reply_text(f"❌ אירעה שגיאה בעיבוד החשבונית: {e}")
         return
 
-    if not items:
+    if not certain and not uncertain:
         await update.message.reply_text(
             "⚠️ לא מצאתי פריטים בחשבונית.\n"
             "ודא שזהו קובץ חשבונית של חצי חינם בפורמט הנכון."
         )
         return
 
-    for item in items:
+    # Update inventory for all confidently-normalized items
+    for item in certain:
         db.set_inventory_status(item, "יש")
 
-    lines = "\n".join(f"  ✅ {item}" for item in items)
-    await update.message.reply_text(
-        f"🛒 עדכנתי *{len(items)} פריטים* במלאי:\n{lines}",
-        parse_mode="Markdown"
-    )
+    if certain:
+        lines = "\n".join(f"  ✅ {item}" for item in certain)
+        await update.message.reply_text(
+            f"🛒 עדכנתי *{len(certain)} פריטים* במלאי:\n{lines}",
+            parse_mode="Markdown"
+        )
+
+    # If some items couldn't be normalized, start the confirmation conversation
+    if uncertain:
+        reply = receipt_flow.start(update.effective_chat.id, uncertain)
+        await update.message.reply_text(reply, parse_mode="Markdown")
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
