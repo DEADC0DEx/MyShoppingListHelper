@@ -204,7 +204,11 @@ def test_receipt_parser_shufersal():
         f"Expected pairzon_url, got {receipt_parser.detect_format(pairzon_text)}"
     assert receipt_parser.detect_format("אין כאן שום סימן מזהה") == "unknown", \
         "Expected unknown for plain Hebrew without format markers"
-    print("  ✅ detect_format correctly identifies all four formats")
+    # EAN-13 barcode fallback: store logo stored as image → no "שופרסל" in text
+    ean_text = "7290000066885\nחלב טרי 3%\n1  1  5.90  5.90"
+    assert receipt_parser.detect_format(ean_text) == "shufersal", \
+        f"Expected shufersal via EAN-13 fallback, got {receipt_parser.detect_format(ean_text)}"
+    print("  ✅ detect_format correctly identifies all four formats (incl. EAN-13 fallback)")
 
     # ── parse_shufersal ────────────────────────────────────────────────────────
 

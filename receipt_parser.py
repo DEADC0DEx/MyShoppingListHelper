@@ -114,13 +114,32 @@ def detect_format(text: str) -> str:
       "shufersal"   — clean Hebrew PDF with column headers תאור / סופק
       "hazi_hinam"  — existing reversed-Hebrew Hazi Hinam PDF format
       "unknown"     — no recognised pattern
+
+    Shufersal detection uses three independent signals (any one is enough):
+      1. Store name "שופרסל" appears in the text.
+      2. Both column headers "תאור" and ("סופק" or "הוזמן") are present.
+      3. EAN-13 barcodes (13 consecutive digits) appear in a receipt that
+         is NOT Hazi Hinam (i.e. the reversed-Hebrew "קפוס" marker is absent).
+         This handles PDFs whose logo/headers are stored as images and
+         therefore produce no extractable text for the store name or headers.
     """
     if PAIRZON_URL_RE.search(text):
         return "pairzon_url"
-    if "שופרסל" in text or ("תאור" in text and ("סופק" in text or "הוזמן" in text)):
+
+    # Shufersal signal 1 & 2: explicit store name or column headers
+    if "שופרסל" in text:
         return "shufersal"
+    if "תאור" in text and ("סופק" in text or "הוזמן" in text):
+        return "shufersal"
+
+    # Hazi Hinam: reversed-Hebrew "ספוק" marker
     if SUPPLIER_PREFIX in text:
         return "hazi_hinam"
+
+    # Shufersal signal 3: EAN-13 barcodes present but no Hazi Hinam marker
+    if re.search(r'\b\d{13}\b', text):
+        return "shufersal"
+
     return "unknown"
 
 

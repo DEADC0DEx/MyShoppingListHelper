@@ -365,7 +365,7 @@ async def cmd_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle document uploads — treat PDFs as Hazi Hinam receipt imports."""
+    """Handle document uploads — parse PDF receipts (Shufersal / Hazi Hinam)."""
     doc = update.message.document
     if not doc or doc.mime_type != "application/pdf":
         await update.message.reply_text("אני יודע לעבד רק קבצי PDF כרגע.")
@@ -378,6 +378,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pdf_bytes = bytes(await tg_file.download_as_bytearray())
 
     try:
+        text = receipt_parser.extract_text_from_pdf(pdf_bytes)
+        fmt  = receipt_parser.detect_format(text)
+        logger.info(f"Receipt format detected: {fmt}")
         certain, uncertain = receipt_parser.import_receipt(pdf_bytes)
     except Exception as e:
         logger.error(f"Receipt import error: {e}")
@@ -385,9 +388,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not certain and not uncertain:
+        fmt_label = {"shufersal": "שופרסל", "hazi_hinam": "חצי חינם"}.get(fmt, fmt)
         await update.message.reply_text(
-            "⚠️ לא מצאתי פריטים בחשבונית.\n"
-            "ודא שזהו קובץ חשבונית של חצי חינם בפורמט הנכון."
+            f"⚠️ לא מצאתי פריטים בחשבונית (פורמט שזוהה: {fmt_label}).\n"
+            "ודא שהקובץ הוא חשבונית שופרסל או חצי חינם ושנשלח כקובץ (לא כתמונה)."
         )
         return
 
