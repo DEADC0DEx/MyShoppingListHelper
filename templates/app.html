@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>🛒 רשימת קניות</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #f0f4f8;
+      --surface:   #ffffff;
+      --primary:   #3b82f6;
+      --primary-d: #2563eb;
+      --danger:    #ef4444;
+      --success:   #22c55e;
+      --warn:      #f59e0b;
+      --text:      #1e293b;
+      --muted:     #94a3b8;
+      --border:    #e2e8f0;
+      --radius:    12px;
+      --shadow:    0 1px 6px rgba(0,0,0,.08);
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--primary);
+      color: #fff;
+      padding: 16px 20px 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(59,130,246,.3);
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 12px; }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; gap: 4px; }
+    .tab {
+      padding: 8px 20px;
+      border: none;
+      background: rgba(255,255,255,.2);
+      color: rgba(255,255,255,.75);
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      font-size: .95rem;
+      font-weight: 600;
+      transition: background .15s, color .15s;
+    }
+    .tab.active { background: var(--bg); color: var(--primary); }
+
+    /* ── Main ── */
+    main { padding: 16px; max-width: 640px; margin: 0 auto; }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── Action bar ── */
+    .action-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .action-bar input[type=text] {
+      flex: 1;
+      min-width: 150px;
+      padding: 10px 14px;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 1rem;
+      font-family: inherit;
+      background: var(--surface);
+      color: var(--text);
+      outline: none;
+      transition: border-color .15s;
+    }
+    .action-bar input[type=text]:focus { border-color: var(--primary); }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 16px;
+      border: none;
+      border-radius: var(--radius);
+      font-size: .9rem;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: filter .15s, transform .08s;
+      white-space: nowrap;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn-primary  { background: var(--primary);  color: #fff; }
+    .btn-primary:hover  { filter: brightness(1.08); }
+    .btn-success  { background: var(--success);  color: #fff; }
+    .btn-success:hover  { filter: brightness(1.08); }
+    .btn-danger   { background: var(--danger);   color: #fff; }
+    .btn-danger:hover   { filter: brightness(1.08); }
+    .btn-outline  {
+      background: var(--surface);
+      color: var(--primary);
+      border: 1.5px solid var(--primary);
+    }
+    .btn-outline:hover { background: #eff6ff; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      padding: 6px 10px;
+    }
+    .btn-ghost:hover { color: var(--danger); background: #fef2f2; border-radius: 8px; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+
+    /* ── List item ── */
+    .list-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 14px;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+      transition: background .1s;
+    }
+    .list-item:last-child { border-bottom: none; }
+    .list-item:hover { background: #f8fafc; }
+
+    .list-item input[type=checkbox] {
+      width: 20px; height: 20px;
+      accent-color: var(--success);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .list-item .item-name {
+      flex: 1;
+      font-size: 1rem;
+    }
+    .list-item.bought .item-name {
+      text-decoration: line-through;
+      color: var(--muted);
+    }
+
+    /* ── Inventory item ── */
+    .inv-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 14px;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .inv-item:last-child { border-bottom: none; }
+    .inv-item .item-name { flex: 1; font-size: .97rem; }
+
+    .status-badge {
+      font-size: .78rem;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+    .status-יש   { background: #dcfce7; color: #15803d; }
+    .status-נמוך { background: #fef9c3; color: #a16207; }
+    .status-אין  { background: #fee2e2; color: #b91c1c; }
+
+    .status-select {
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 4px 8px;
+      font-size: .85rem;
+      font-family: inherit;
+      background: var(--surface);
+      cursor: pointer;
+    }
+
+    /* ── Section header ── */
+    .section-header {
+      font-size: .8rem;
+      font-weight: 700;
+      letter-spacing: .05em;
+      color: var(--muted);
+      text-transform: uppercase;
+      padding: 10px 4px 4px;
+    }
+
+    /* ── Tool bar ── */
+    .tool-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    /* ── Empty state ── */
+    .empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+    .empty .emoji { font-size: 2.5rem; margin-bottom: 8px; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #1e293b;
+      color: #fff;
+      padding: 10px 22px;
+      border-radius: 24px;
+      font-size: .9rem;
+      font-weight: 600;
+      box-shadow: 0 4px 16px rgba(0,0,0,.25);
+      transition: transform .3s ease;
+      z-index: 1000;
+      white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+
+    /* ── Modal ── */
+    .modal-backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.45);
+      z-index: 200;
+      justify-content: center;
+      align-items: flex-end;
+    }
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border-radius: var(--radius) var(--radius) 0 0;
+      width: 100%;
+      max-width: 640px;
+      max-height: 80dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+    .modal-body { overflow-y: auto; padding: 12px 16px; flex: 1; }
+    .modal-footer {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .import-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 4px;
+      border-bottom: 1px solid var(--border);
+    }
+    .import-item:last-child { border-bottom: none; }
+    .import-item label {
+      flex: 1;
+      font-size: .97rem;
+      cursor: pointer;
+    }
+    .uncertain-badge {
+      font-size: .72rem;
+      background: #fef9c3;
+      color: #a16207;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+    }
+
+    /* ── Drop zone ── */
+    #drop-zone {
+      border: 2px dashed var(--primary);
+      border-radius: var(--radius);
+      padding: 28px;
+      text-align: center;
+      color: var(--primary);
+      cursor: pointer;
+      font-size: .95rem;
+      font-weight: 600;
+      transition: background .15s;
+      margin-bottom: 14px;
+    }
+    #drop-zone:hover, #drop-zone.drag-over { background: #eff6ff; }
+    #drop-zone .emoji { font-size: 2rem; display: block; margin-bottom: 8px; }
+
+    /* ── Spinner ── */
+    .spinner {
+      width: 20px; height: 20px;
+      border: 3px solid rgba(255,255,255,.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Count badge */
+    .count-badge {
+      background: var(--primary);
+      color: #fff;
+      font-size: .72rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 12px;
+      margin-right: 4px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🛒 רשימת קניות</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('list')">
+      רשימה <span id="list-badge" class="count-badge" style="display:none"></span>
+    </button>
+    <button class="tab" onclick="switchTab('inventory')">מלאי</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Shopping list panel ── -->
+  <div id="panel-list" class="panel active">
+
+    <div class="action-bar" style="margin-top:14px">
+      <input type="text" id="add-input" placeholder="הוסף פריט..." autocomplete="off"
+             onkeydown="if(event.key==='Enter') addItem()">
+      <button class="btn btn-primary" onclick="addItem()">+ הוסף</button>
+    </div>
+
+    <div class="tool-bar">
+      <label class="btn btn-outline" style="cursor:pointer">
+        📄 ייבא חשבונית
+        <input type="file" accept=".pdf" style="display:none" onchange="handleFileSelect(this)">
+      </label>
+      <button class="btn btn-outline" onclick="exportList()">📤 ייצא לטלפון</button>
+    </div>
+
+    <!-- Drag-and-drop zone (hidden until user drags) -->
+    <div id="drop-zone" style="display:none" onclick="document.querySelector('input[type=file]').click()">
+      <span class="emoji">📄</span>
+      גרור קובץ PDF לכאן
+    </div>
+
+    <div id="list-container"></div>
+  </div>
+
+  <!-- ── Inventory panel ── -->
+  <div id="panel-inventory" class="panel">
+
+    <div class="action-bar" style="margin-top:14px">
+      <input type="text" id="inv-search" placeholder="חיפוש..." autocomplete="off"
+             oninput="filterInventory()">
+    </div>
+
+    <div id="inventory-container"></div>
+  </div>
+
+</main>
+
+<!-- ── Import confirmation modal ── -->
+<div id="import-modal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <span>📦 פריטים שנמצאו בחשבונית</span>
+      <button class="btn btn-ghost" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="import-modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">ביטול</button>
+      <button class="btn btn-success" onclick="applyImport()">✓ עדכן מלאי</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let listItems    = [];
+let inventoryAll = [];
+let importItems  = [];  // [{name, uncertain}]
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    const panels = ['list', 'inventory'];
+    t.classList.toggle('active', panels[i] === name);
+  });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  if (name === 'inventory') loadInventory();
+}
+
+// ── Shopping list ─────────────────────────────────────────────────────────────
+async function loadList() {
+  const data = await api('/api/list');
+  listItems = data;
+  renderList();
+}
+
+function renderList() {
+  const container = document.getElementById('list-container');
+  const badge     = document.getElementById('list-badge');
+  badge.textContent = listItems.length || '';
+  badge.style.display = listItems.length ? '' : 'none';
+
+  if (listItems.length === 0) {
+    container.innerHTML = `<div class="empty"><div class="emoji">✨</div>הרשימה ריקה!</div>`;
+    return;
+  }
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = listItems.map(name => `
+    <div class="list-item" id="item-${cssId(name)}">
+      <input type="checkbox" onchange="buyItem('${esc(name)}', this)">
+      <span class="item-name">${esc(name)}</span>
+      <button class="btn btn-ghost" title="הסר" onclick="removeItem('${esc(name)}')">🗑</button>
+    </div>
+  `).join('');
+  container.innerHTML = '';
+  container.appendChild(card);
+}
+
+async function addItem() {
+  const input = document.getElementById('add-input');
+  const name  = input.value.trim();
+  if (!name) return;
+  await api('/api/list', 'POST', { name });
+  input.value = '';
+  input.focus();
+  await loadList();
+  toast('✅ נוסף: ' + name);
+}
+
+async function removeItem(name) {
+  await api('/api/list/' + encodeURIComponent(name), 'DELETE');
+  listItems = listItems.filter(n => n !== name);
+  renderList();
+  toast('🗑 הוסר: ' + name);
+}
+
+async function buyItem(name, checkbox) {
+  const row = document.getElementById('item-' + cssId(name));
+  row.classList.add('bought');
+  checkbox.disabled = true;
+  await api('/api/list/buy/' + encodeURIComponent(name), 'POST');
+  await new Promise(r => setTimeout(r, 600));
+  listItems = listItems.filter(n => n !== name);
+  renderList();
+  toast('✅ קנית: ' + name);
+}
+
+// ── Inventory ─────────────────────────────────────────────────────────────────
+async function loadInventory() {
+  const data = await api('/api/inventory');
+  inventoryAll = data;
+  renderInventory(inventoryAll);
+}
+
+function renderInventory(items) {
+  const container = document.getElementById('inventory-container');
+  if (items.length === 0) {
+    container.innerHTML = `<div class="empty"><div class="emoji">📦</div>המלאי ריק</div>`;
+    return;
+  }
+
+  const order  = ['יש', 'נמוך', 'אין'];
+  const labels = { 'יש': '✅ יש', 'נמוך': '⚠️ נמוך', 'אין': '❌ אין' };
+  const groups = {};
+  order.forEach(s => groups[s] = []);
+  items.forEach(item => {
+    if (groups[item.status] !== undefined) groups[item.status].push(item);
+    else groups['יש'].push(item);
+  });
+
+  container.innerHTML = order.filter(s => groups[s].length).map(status => `
+    <div class="section-header">${labels[status]}</div>
+    <div class="card">
+      ${groups[status].map(item => `
+        <div class="inv-item">
+          <span class="item-name">${esc(item.name)}</span>
+          <select class="status-select" onchange="setStatus('${esc(item.name)}', this.value)">
+            <option value="יש"   ${item.status==='יש'   ? 'selected':''}>יש</option>
+            <option value="נמוך" ${item.status==='נמוך' ? 'selected':''}>נמוך</option>
+            <option value="אין"  ${item.status==='אין'  ? 'selected':''}>אין</option>
+          </select>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
+function filterInventory() {
+  const q = document.getElementById('inv-search').value.trim().toLowerCase();
+  renderInventory(q ? inventoryAll.filter(i => i.name.includes(q)) : inventoryAll);
+}
+
+async function setStatus(name, status) {
+  await api('/api/inventory/' + encodeURIComponent(name), 'POST', { status });
+  await loadInventory();
+  toast('עודכן: ' + name + ' → ' + status);
+}
+
+// ── PDF import ─────────────────────────────────────────────────────────────────
+function handleFileSelect(input) {
+  if (input.files[0]) uploadPDF(input.files[0]);
+}
+
+async function uploadPDF(file) {
+  const form = new FormData();
+  form.append('file', file);
+
+  toast('⏳ מעבד חשבונית...');
+  try {
+    const res = await fetch('/api/import', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) { toast('❌ ' + (data.error || 'שגיאה')); return; }
+
+    importItems = [
+      ...data.certain.map(n  => ({ name: n, uncertain: false })),
+      ...data.uncertain.map(n => ({ name: n, uncertain: true  })),
+    ];
+    openImportModal(data.format);
+  } catch(e) {
+    toast('❌ שגיאת תקשורת: ' + e.message);
+  }
+}
+
+function openImportModal(fmt) {
+  const fmtLabel = { shufersal: 'שופרסל', hazi_hinam: 'חצי חינם', unknown: '' }[fmt] || fmt;
+  const body = document.getElementById('import-modal-body');
+
+  if (importItems.length === 0) {
+    body.innerHTML = '<div class="empty">לא נמצאו פריטים בחשבונית.</div>';
+  } else {
+    body.innerHTML = `
+      <p style="color:var(--muted);font-size:.85rem;margin-bottom:10px">
+        פורמט: ${fmtLabel} &nbsp;|&nbsp; ${importItems.length} פריטים
+      </p>
+      ${importItems.map((item, i) => `
+        <div class="import-item">
+          <input type="checkbox" id="imp-${i}" checked>
+          <label for="imp-${i}">${esc(item.name)}</label>
+          ${item.uncertain ? '<span class="uncertain-badge">לא מזוהה</span>' : ''}
+        </div>
+      `).join('')}
+    `;
+  }
+
+  document.getElementById('import-modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('import-modal').classList.remove('open');
+}
+
+async function applyImport() {
+  const checked = importItems
+    .filter((_, i) => document.getElementById('imp-' + i)?.checked)
+    .map(item => item.name);
+
+  if (checked.length === 0) { closeModal(); return; }
+
+  const data = await api('/api/import/apply', 'POST', { items: checked });
+  closeModal();
+  toast(`✅ עודכן מלאי: ${data.count} פריטים`);
+  await loadList();
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────────
+function exportList() {
+  const a = document.createElement('a');
+  a.href = '/api/export';
+  a.click();
+  toast('📤 מוריד רשימה...');
+}
+
+// ── Drag-and-drop ─────────────────────────────────────────────────────────────
+(function setupDragDrop() {
+  const body = document.body;
+  let entered = 0;
+
+  body.addEventListener('dragenter', e => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    entered++;
+    if (entered === 1) {
+      const dz = document.getElementById('drop-zone');
+      dz.style.display = 'block';
+      dz.classList.add('drag-over');
+    }
+  });
+  body.addEventListener('dragleave', () => {
+    entered = Math.max(0, entered - 1);
+    if (entered === 0) {
+      const dz = document.getElementById('drop-zone');
+      dz.style.display = 'none';
+      dz.classList.remove('drag-over');
+    }
+  });
+  body.addEventListener('dragover', e => e.preventDefault());
+  body.addEventListener('drop', e => {
+    e.preventDefault();
+    entered = 0;
+    const dz = document.getElementById('drop-zone');
+    dz.style.display = 'none';
+    dz.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file && file.name.toLowerCase().endsWith('.pdf')) uploadPDF(file);
+    else toast('⚠️ גרור קובץ PDF בלבד');
+  });
+})();
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+async function api(url, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : null,
+  };
+  const res = await fetch(url, opts);
+  return res.json();
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function cssId(s) {
+  return s.replace(/[^a-zA-Z\u05d0-\u05ea0-9]/g, '_');
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadList();
+</script>
+</body>
+</html>
